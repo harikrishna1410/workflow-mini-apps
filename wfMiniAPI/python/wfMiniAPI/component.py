@@ -1,3 +1,4 @@
+import time
 class Component:
     def __init__(self, name):
         self.name = name
@@ -20,16 +21,19 @@ class Component:
         :param targets: Optional list of target nodes. If None, send to all connections.
         """
         targets = targets or self.connections
-        for node in targets:
-            node.receive(data, sender=self)
+        print(f"{self.name} sending data: {data}")
+        time.sleep(0.5)
 
-    def receive(self, data, sender=None):
+    def receive(self, sender=None):
         """
         Handle received data. Override this in subclasses for custom behavior.
         :param data: The data received.
         :param sender: The node that sent the data.
         """
+        data = "sample data"
         print(f"{self.name} received data from {sender.name if sender else 'unknown'}: {data}")
+        time.sleep(0.5)
+        return data
 
     def get_connections(self):
         """Return a list of connected nodes."""

@@ -147,7 +147,6 @@ class AI(Component):
             self.train()
             toc = time.perf_counter()
             simulated_time = toc - tic
-            print(f"Simulated time: {simulated_time:.2f}s, Total layers: {self.model.nlayers}")
         return 
 
     def infer(self, inputs):

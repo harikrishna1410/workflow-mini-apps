@@ -35,17 +35,14 @@ class Simulation(Component):
             if k['name'] == name:
                 k['data_size'] = data_size
 
-    def run(self, total_time):
+    def run(self):
         """Run all kernels in sequence for the specified total_time."""
-        import time
-        start_time = time.time()
-        while (time.time() - start_time) < total_time:
-            for k in self.kernels:
-                for _ in range(k['run_count']):
-                    if k['data_size'] is not None:
-                        k['func'](k['data_size'])
-                    else:
-                        k['func']()
+        for k in self.kernels:
+            for _ in range(k['run_count']):
+                if k['data_size'] is not None:
+                    k['func'](k['data_size'])
+                else:
+                    k['func']()
     
     def set_kernel_run_count_by_time(self, name, total_time):
         """
