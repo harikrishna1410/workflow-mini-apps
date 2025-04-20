@@ -1,39 +1,184 @@
 import time
+import os
+import pickle
+import logging
+import sqlite3
+import shutil
+
 class Component:
-    def __init__(self, name):
+    def __init__(self, name, config:dict={"type":"filesystem"}):
         self.name = name
+        self.config = config
         self.connections = []
+        if self.config["type"] == "filesystem":
+            # Ensure that tmp directory is empty
+            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+            if os.path.exists(dirname):
+                shutil.rmtree(dirname)
+        
+        # Setup logging
+        self.logger = logging.getLogger(name)
+        self.logger.setLevel(logging.INFO)
+        
+        # Create logs directory if it doesn't exist
+        log_dir = os.path.join(os.getcwd(), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Create file handler
+        log_file = os.path.join(log_dir, f"{name}.log")
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.INFO)
+        
+        # Create formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        
+        # Add handler to logger
+        self.logger.addHandler(file_handler)
+        
+        self.logger.info(f"Component {name} initialized with config {config}")
 
     def connect(self, other_node):
         """Connect this node to another node."""
         if other_node not in self.connections:
             self.connections.append(other_node)
+            self.logger.info(f"Connected to {other_node.name}")
 
     def disconnect(self, other_node):
         """Disconnect this node from another node."""
         if other_node in self.connections:
             self.connections.remove(other_node)
+            self.logger.info(f"Disconnected from {other_node.name}")
 
-    def send(self, data, targets=None):
+    def send(self, data, targets:list=None):
         """
         Send data to all or selected connections.
         :param data: The data to send.
-        :param targets: Optional list of target nodes. If None, send to all connections.
         """
         targets = targets or self.connections
-        print(f"{self.name} sending data: {data}")
-        time.sleep(0.5)
+        self.logger.info(f"Sending data: {data}")
+        
+        if self.config["type"] == "filesystem":
+            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+            os.makedirs(dirname, exist_ok=True)
+            for target in targets:
+                filename = os.path.join(dirname, f"{self.name}_{target.name}_data.pickle")
+                with open(filename, "wb") as f:
+                    pickle.dump(data, f)
+                self.logger.info(f"Data sent to {target.name} at {filename}")
+        else:
+            self.logger.error("Unsupported data transport type")
+            raise ValueError("Unsupported data transport type")
 
-    def receive(self, sender=None):
+    def receive(self, senders:list=None):
         """
         Handle received data. Override this in subclasses for custom behavior.
         :param data: The data received.
         :param sender: The node that sent the data.
         """
-        data = "sample data"
-        print(f"{self.name} received data from {sender.name if sender else 'unknown'}: {data}")
-        time.sleep(0.5)
+        data = {}
+        senders = senders or self.connections
+        dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+        
+        if not os.path.exists(dirname):
+            self.logger.error(f"Directory {dirname} does not exist")
+            raise AssertionError(f"Directory {dirname} does not exist")
+            
+        if self.config["type"] == "filesystem":
+            for sender in senders:
+                filename = os.path.join(dirname, f"{sender.name}_{self.name}_data.pickle")
+                if not os.path.exists(filename):
+                    self.logger.error(f"File {filename} does not exist")
+                    raise AssertionError(f"File {filename} does not exist")
+                    
+                with open(filename, "rb") as f:
+                    data[sender.name] = pickle.load(f)
+                    self.logger.info(f"Received data from {sender.name}")
+        else:
+            self.logger.error("Unsupported data transport type")
+            raise ValueError("Unsupported data transport type")
         return data
+    
+    def stage_write(self, key, data):
+        """
+        Function stages data as a key-value pair.
+        The key and filename are stored in a database, while the data is saved in a file.
+        """
+        if self.config["type"] == "filesystem":
+            # Ensure the directory for files exists
+            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+            os.makedirs(dirname, exist_ok=True)
+
+            # Generate a unique filename for the data file
+            current_time = str(time.time())
+            filename = os.path.join(dirname, f"{self.name}_{current_time}.pickle")
+
+            # Save the data to the file
+            with open(filename, "wb") as f:
+                pickle.dump(data, f)
+
+            # Path to the SQLite database
+            db_path = os.path.join(dirname, f"staging.db")
+
+            # Connect to the database and store the key-filename mapping
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # Create the table if it doesn't exist
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS staging (
+                    key TEXT PRIMARY KEY,
+                    filename TEXT
+                )
+            """)
+
+            # Insert the key-filename mapping
+            try:
+                cursor.execute("INSERT INTO staging (key, filename) VALUES (?, ?)", (key, filename))
+                conn.commit()
+                self.logger.info(f"Staged data for {key} at {filename} and recorded in database {db_path}")
+            except sqlite3.IntegrityError:
+                self.logger.error(f"Key {key} already exists in the staging database")
+                raise ValueError(f"Key {key} already exists")
+            finally:
+                conn.close()
+        else:
+            self.logger.error("Unsupported data transport type")
+            raise ValueError("Unsupported data transport type")
+    
+    def stage_read(self, key):
+        """
+            Function reads the data from a staging area using the key.
+            the key is used to look up the filename in the database.
+            The data is then loaded from the file.
+        """
+        if self.config["type"] == "filesystem":
+            # Path to the SQLite database
+            db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
+
+            # Connect to the database and retrieve the filename for the key
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # Query the database for the filename associated with the key
+            cursor.execute("SELECT filename FROM staging WHERE key=?", (key,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if row is None:
+                self.logger.error(f"Key {key} not found in the staging database")
+                raise ValueError(f"Key {key} not found in the staging database")
+
+            filename = row[0]
+
+            # Load the data from the file
+            with open(filename, "rb") as f:
+                data = pickle.load(f)
+                self.logger.info(f"Read staged data for {key} from {filename}")
+                return data
+        else:
+            self.logger.error("Unsupported data transport type")
+            raise ValueError("Unsupported data transport type")
 
     def get_connections(self):
         """Return a list of connected nodes."""

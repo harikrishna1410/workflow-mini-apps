@@ -1,5 +1,4 @@
-from training import AI
-from simulation import Simulation
+from wfMiniAPI import AI, Simulation
 import numpy as np
 
 
@@ -25,27 +24,12 @@ def x3(data_size):
 
 ###*************build the workflow*******************************************
 ##build the AI model
-ai = AI()
-train_time = 0.5
-ai.set_nlayers_train(train_time)
-print(f"number of layers in the AI models {ai.model.nlayers}")
-
+ai = AI(num_layers=100)
 
 #Build the simulation
 sim = Simulation()
 ### Add kernels to the simulation
-sim.add_kernel("kernel1", matmul , run_count=1, data_size=(8,8,8))
-sim.add_kernel("kernel2", x2, run_count=1, data_size=(16,16,16))
-sim.add_kernel("kernel3", x3, run_count=1, data_size=(16,16,16))
-
-##set the run count of each kernel to 0.5 seconds
-sim.set_kernel_run_count_by_time("kernel1", 1)
-sim.set_kernel_run_count_by_time("kernel2", 1)
-sim.set_kernel_run_count_by_time("kernel3", 1)
-
-
-for k in sim.kernels:
-    print(f"Kernel: {k['name']}, Run Count: {k['run_count']}, Data Size: {k['data_size']}")
+sim.add_kernel("kernel1", matmul , run_count=100, data_size=(32,32,32))
 
 #connect AI and simulation
 sim.connect(ai)
@@ -58,10 +42,18 @@ niters = 10
 for i in range(niters):
     ##run the simulation
     sim.run()
-    ##send data to AI
-    sim.send("sim data")
+    if i % 2 == 0:
+        ##train the AI model
+        sim.send(f"train")
+    else:
+        sim.send(f"infer")
     ##received data from SIM
-    ai.receive()
-    ##train the AI model
-    ai.train()
+    data = ai.receive()
+    if data["SIM"] == "train":
+        ##train the AI model
+        print(f"Training AI model for {ai.num_epochs} epochs")
+        ai.train()
+    else:
+        print("Infer from the AI model")
+        ai.infer()
 ##*************done running the workflow***********************

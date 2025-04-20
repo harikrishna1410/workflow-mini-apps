@@ -1,11 +1,11 @@
-import kernel_new as wf
 import json
-from component import Component
+from .component import Component
 import time
 
 class Simulation(Component):
-    def __init__(self):
-        super().__init__("SIM")
+    def __init__(self,name="SIM"):
+        super().__init__(name)
+        self.name = name
         self.kernels = []
         self.ktoi = {}
 

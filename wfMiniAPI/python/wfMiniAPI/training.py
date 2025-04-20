@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 import torch.nn as nn
-from component import Component
+from .component import Component
 import time
 
 class SimpleFeedForwardNet(nn.Module):
@@ -73,7 +73,8 @@ def train(model, dataloader, criterion, optimizer, device, num_epochs=10):
 
 
 class AI(Component):
-    def __init__(self, 
+    def __init__(self,
+                 name = "AI", 
                 model_type="feedforward", 
                 dropout=0.1, 
                 use_batchnorm=True, 
@@ -85,8 +86,8 @@ class AI(Component):
                 shuffle=True, 
                 ddp=False, 
                 num_epochs=10):
-        super().__init__("AI")
-        self.name = "AI"
+        super().__init__(name)
+        self.name = name
         self.model_type = model_type
         self.dropout = dropout
         self.use_batchnorm = use_batchnorm
@@ -112,7 +113,7 @@ class AI(Component):
                                               use_batchnorm=self.use_batchnorm, 
                                               num_layers=self.num_layers)
         else:
-            raise ValueError(f"Unsupported model_type: {model_type}")
+            raise ValueError(f"Unsupported model_type: {self.model_type}")
         return self.model
         
     def setup_training(self):
@@ -126,7 +127,10 @@ class AI(Component):
     def train(self):
         """Train the model using data specifications to build a dataloader."""
         if self.model is None or self.criterion is None or self.optimizer is None:
-            raise ValueError("Model, criterion, or optimizer not set up. Call build_model and setup_training first.")
+            if self.model is None:
+                self.build_model()
+            self.setup_training()
+
         dataloader = setup_dataloader(  self.data_size, 
                                         (self.model.neurons_per_layer,), 
                                         (self.model.neurons_per_layer,), 
@@ -149,11 +153,12 @@ class AI(Component):
             simulated_time = toc - tic
         return 
 
-    def infer(self, inputs):
+    def infer(self):
         """Perform inference on inputs."""
         if self.model is None:
             raise ValueError("Model not built yet. Call build_model first.")
-            
+        
+        inputs = torch.randn((self.batch_size, self.model.neurons_per_layer), dtype=torch.float32)
         self.model.eval()
         with torch.no_grad():
             inputs = inputs.to(self.device)
