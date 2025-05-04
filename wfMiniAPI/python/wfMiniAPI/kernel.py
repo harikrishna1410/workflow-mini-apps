@@ -15,6 +15,12 @@ except ImportError:
     CUPY_AVAILABLE = False
 
 try:
+    import dpnp as dnp
+    DPNP_AVAILABLE = True
+except ImportError:
+    DPNP_AVAILABLE = False
+
+try:
     from mpi4py import MPI
     MPI4PY_AVAILABLE = True
 except ImportError:
@@ -39,6 +45,10 @@ def get_device_module(device):
         if not CUPY_AVAILABLE:
             raise ImportError("CuPy is not installed. Install CuPy to use GPU capabilities.")
         return cp
+    elif device == "xpu":
+        if not DPNP_AVAILABLE:
+            raise ImportError("DPNP not installed")
+        return dnp
     else:
         return np
 
@@ -228,56 +238,51 @@ def dataCopyD2H(data_size):
 #computation
 #################
 
-def matMulSimple2D(device, size):
+def matMulSimple2D(device:str, size:tuple):
     xp = get_device_module(device)
-    matrix_a = xp.empty((size, size), dtype=xp.float32)
-    matrix_b = xp.empty((size, size), dtype=xp.float32)
+    matrix_a = xp.empty(size, dtype=xp.float32)
+    matrix_b = xp.empty(size, dtype=xp.float32)
     matrix_c = xp.matmul(matrix_a, matrix_b)
 
-def matMulGeneral(device, size_a, size_b, axis):
+def matMulGeneral(device:str, size_a:tuple, size_b:tuple, axis: int | tuple = 2):
     xp = get_device_module(device)
-    matrix_a = xp.empty(tuple(size_a), dtype=xp.float32)
-    matrix_b = xp.empty(tuple(size_b), dtype=xp.float32)
+    matrix_a = xp.empty(size_a, dtype=xp.float32)
+    matrix_b = xp.empty(size_b, dtype=xp.float32)
     matrix_c = xp.tensordot(matrix_a, matrix_b, axis)
 
-def fft(device, data_size, type_in, transform_dim):
+def fft(device:str, data_size:tuple, type_in:str, transform_dim):
     xp = get_device_module(device)
     if type_in == "float":
-        data_in = xp.empty(tuple(data_size), dtype=xp.float32)
+        data_in = xp.empty(data_size, dtype=xp.float32)
     elif type_in == "double":
-        data_in = xp.empty(tuple(data_size), dtype=xp.float64)
+        data_in = xp.empty(data_size, dtype=xp.float64)
     elif type_in == "complexF":
-        data_in = xp.empty(tuple(data_size), dtype=xp.complex64)
+        data_in = xp.empty(data_size, dtype=xp.complex64)
     elif type_in == "complexD":
-        data_in = xp.empty(tuple(data_size), dtype=xp.complex128)
+        data_in = xp.empty(data_size, dtype=xp.complex128)
     else:
         raise TypeError("In fft call, type_in must be one of the following: [float, double, complexF, complexD]")
 
     out = xp.fft.fft(data_in, axis=transform_dim)
 
     
-def axpy(device, size):
+def axpy(device:str, size:tuple):
     xp = get_device_module(device)
     x = xp.empty(size, dtype=xp.float32)
     y = xp.empty(size, dtype=xp.float32)
     y += 1.01 * x
 
-def implaceCompute(device, size, num_op, op):
+def implaceCompute(device:str, size:tuple, num_op:int, op):
     xp = get_device_module(device)
     x = xp.empty(size, dtype=xp.float32)
-    if isinstance(op, str):
-        try:
-            func = getattr(xp, op)
-        except AttributeError:
-            raise ValueError(f"The operator '{op}' is not available in the module {xp.__name__}.")
-    elif callable(op):
-        func = op
-    else:
-        raise ValueError("Operator must be either a string or a callable function.")
+    # Ensure op is a callable
+    if not callable(op):
+        raise ValueError("Operator must be a callable function.")
+    
     for _ in range(num_op):
-        x = func(x)
+        x = op(x)
 
-def generateRandomNumber(device, size):
+def generateRandomNumber(device:str, size:tuple):
     xp = get_device_module(device)
     x = xp.random.rand(size)
 
@@ -298,8 +303,6 @@ def scatterAdd(device, x_size, y_size):
             }
         ''', 'my_scatter_add_kernel')
 
-
-    
 #for the tutorial, three things:
 #exalearn (CPU + GPU v1), ddmd v1, how to build wk-miniapp
 #show installation script + run script, in installation script, show how to install assuming we are working in a brand new env (container for example)
