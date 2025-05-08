@@ -21,6 +21,8 @@ except ImportError:
     DPNP_AVAILABLE = False
 
 try:
+    import mpi4py
+    mpi4py.rc.initialize = False
     from mpi4py import MPI
     MPI4PY_AVAILABLE = True
 except ImportError:
@@ -52,12 +54,17 @@ def get_device_module(device):
     else:
         return np
 
-
+def init_mpi():
+    if not MPI.Is.intialized():
+        MPI.Init()
+    
+    
 #################
 #io
 #################
 
 def writeSingleRank(num_bytes, data_root_dir):
+    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
@@ -77,6 +84,7 @@ def writeSingleRank(num_bytes, data_root_dir):
 
 
 def writeNonMPI(num_bytes, data_root_dir, filename_suffix=None):
+    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
@@ -98,6 +106,7 @@ def writeNonMPI(num_bytes, data_root_dir, filename_suffix=None):
             dset = f.create_dataset("data", data = data)
 
 def writeWithMPI(num_bytes, data_root_dir, filename_suffix=None):
+    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
@@ -123,6 +132,7 @@ def writeWithMPI(num_bytes, data_root_dir, filename_suffix=None):
             dset[offset:offset+num_elem] = data
 
 def readNonMPI(num_bytes, data_root_dir, filename_suffix=None):
+    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
@@ -143,6 +153,7 @@ def readNonMPI(num_bytes, data_root_dir, filename_suffix=None):
             data = f['data'][0:num_elem] 
 
 def readWithMPI(num_bytes, data_root_dir, filename_suffix=None):
+    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
@@ -173,6 +184,7 @@ def readWithMPI(num_bytes, data_root_dir, filename_suffix=None):
 #################
 
 def MPIallReduce(device, data_size):
+    init_mpi()
     xp = get_device_module(device)
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to perform allreduce.")
@@ -194,6 +206,7 @@ def MPIallReduce(device, data_size):
             cp.cuda.Stream.null.synchronize()
     
 def MPIallGather(device, data_size):
+    init_mpi()
     xp = get_device_module(device)
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to perform allreduce.")
