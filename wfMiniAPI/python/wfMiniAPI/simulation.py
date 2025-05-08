@@ -3,13 +3,20 @@ from .component import Component
 import time
 
 class Simulation(Component):
-    def __init__(self,name="SIM"):
+    def __init__(self,name="SIM",comm=None):
         super().__init__(name)
         self.name = name
+        self.comm = comm
         self.kernels = []
         self.ktoi = {}
+        if self.comm is not None:
+            self.size = self.comm.Get_size()
+            self.rank = self.comm.Get_rank()
+        else:
+            self.size = 1
+            self.rank = 0
 
-    def add_kernel(self, name, kernel_func, run_count=1, data_size=None):
+    def add_kernel(self, name:str, kernel_func, run_count:int=1, data_size:tuple=(32,32,32)):
         """Add a kernel to the simulation."""
         self.kernels.append({
             'name': name,
@@ -43,6 +50,8 @@ class Simulation(Component):
                     k['func'](k['data_size'])
                 else:
                     k['func']()
+            if self.comm is not None:
+                self.comm.Barrier()
     
     def set_kernel_run_count_by_time(self, name, total_time):
         """
@@ -66,36 +75,38 @@ class Simulation(Component):
         single_run_time = end - start
         if single_run_time <= 0:
             raise ValueError("Measured single_run_time must be positive")
+        if self.comm is not None:
+            single_run_time = self.comm.allreduce(single_run_time) / self.size
         run_count = int(total_time // single_run_time)
         k['run_count'] = max(1, run_count)
     
-    def set_kernel_data_size_by_time(self, name, total_time, min_data_size=8*8*8, max_data_size=64*64*64,steps=8*8*8):
-        """
-        Set the data_size for a kernel so that its total execution time is close to total_time.
-        Assumes run_count is already set.
-        Uses self.ktoi to get the kernel index.
-        """
-        if name not in self.ktoi:
-            raise ValueError(f"Kernel '{name}' not found in self.ktoi")
-        idx = self.ktoi[name]
-        k = self.kernels[idx]
-        run_count = k.get('run_count', 1)
-        if run_count <= 0:
-            raise ValueError("run_count must be positive to set data_size by time")
+    # def set_kernel_data_size_by_time(self, name, total_time, min_data_size=8*8*8, max_data_size=64*64*64,steps=8*8*8):
+    #     """
+    #     Set the data_size for a kernel so that its total execution time is close to total_time.
+    #     Assumes run_count is already set.
+    #     Uses self.ktoi to get the kernel index.
+    #     """
+    #     if name not in self.ktoi:
+    #         raise ValueError(f"Kernel '{name}' not found in self.ktoi")
+    #     idx = self.ktoi[name]
+    #     k = self.kernels[idx]
+    #     run_count = k.get('run_count', 1)
+    #     if run_count <= 0:
+    #         raise ValueError("run_count must be positive to set data_size by time")
 
-        data_size = min_data_size
-        best_data_size = data_size
-        min_diff = float('inf')
-        step_size = max(1, (max_data_size - min_data_size) // steps)
-        for test_size in range(min_data_size, max_data_size + 1, step_size):
-            start = time.time()
-            for _ in range(run_count):
-                k['func'](test_size)
-            elapsed = time.time() - start
-            diff = abs(elapsed - total_time)
-            if diff < min_diff:
-                min_diff = diff
-            best_data_size = test_size
-            if elapsed >= total_time:
-                break
-        k['data_size'] = best_data_size
+    #     data_size = min_data_size
+    #     best_data_size = data_size
+    #     min_diff = float('inf')
+    #     step_size = max(1, (max_data_size - min_data_size) // steps)
+    #     for test_size in range(min_data_size, max_data_size + 1, step_size):
+    #         start = time.time()
+    #         for _ in range(run_count):
+    #             k['func'](test_size)
+    #         elapsed = time.time() - start
+    #         diff = abs(elapsed - total_time)
+    #         if diff < min_diff:
+    #             min_diff = diff
+    #         best_data_size = test_size
+    #         if elapsed >= total_time:
+    #             break
+    #     k['data_size'] = best_data_size

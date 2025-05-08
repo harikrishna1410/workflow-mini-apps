@@ -6,9 +6,11 @@ setup(
     packages=find_packages(),
     install_requires=[
         'numpy',
+        'dpnp',
         'h5py',
         'mpi4py',
-        'torch'
+        'torch',
+        'pytest'
     ],
     extras_require={
         'gpu': ['cupy']

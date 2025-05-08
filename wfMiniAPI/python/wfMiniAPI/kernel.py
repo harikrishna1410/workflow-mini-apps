@@ -3,10 +3,6 @@ import time
 import os
 import sys
 
-print("Python executable location:", sys.executable)
-print("NumPy version:", np.__version__)
-print("NumPy location:", np.__file__)
-
 try:
     import cupy as cp
     from cupy.cuda import nccl
@@ -43,9 +39,9 @@ def sleep(seconds):
     time.sleep(seconds)
 
 def get_device_module(device):
-    if device == "gpu":
+    if device == "cuda":
         if not CUPY_AVAILABLE:
-            raise ImportError("CuPy is not installed. Install CuPy to use GPU capabilities.")
+            raise ImportError("CuPy is not installed. Install CuPy to use cuda capabilities.")
         return cp
     elif device == "xpu":
         if not DPNP_AVAILABLE:
@@ -55,7 +51,7 @@ def get_device_module(device):
         return np
 
 def init_mpi():
-    if not MPI.Is.intialized():
+    if not MPI.Is_initialized():
         MPI.Init()
     
     
@@ -183,7 +179,7 @@ def readWithMPI(num_bytes, data_root_dir, filename_suffix=None):
 #comm 
 #################
 
-def MPIallReduce(device, data_size):
+def MPIallReduce(device:str, data_size:tuple=(32,32), backend:str="mpi"):
     init_mpi()
     xp = get_device_module(device)
     if not MPI4PY_AVAILABLE:
@@ -199,49 +195,90 @@ def MPIallReduce(device, data_size):
         if device == "cpu":
             comm.Allreduce(sendbuf, recvbuf, op=MPI.SUM)
     
-        elif device == "gpu":
-            uid = nccl.get_unique_id()
-            comm_nccl = nccl.NcclCommunicator(size, uid, rank)
-            comm_nccl.allReduce(sendbuf.data.ptr, recvbuf.data.ptr, data_size, nccl.NCCL_FLOAT32, nccl.NCCL_SUM, cp.cuda.Stream.null)
-            cp.cuda.Stream.null.synchronize()
+        elif device == "cuda":
+            if backend == "nccl":
+                uid = nccl.get_unique_id()
+                comm_nccl = nccl.NcclCommunicator(size, uid, rank)
+                comm_nccl.allReduce(sendbuf.data.ptr, recvbuf.data.ptr, data_size, nccl.NCCL_FLOAT32, nccl.NCCL_SUM, cp.cuda.Stream.null)
+                cp.cuda.Stream.null.synchronize()
+            elif backend == "mpi":
+                sendbuf_h = cp.asnumpy(sendbuf)
+                recvbuf_h = cp.asnumpy(recvbuf)
+                comm.Allreduce(sendbuf_h, recvbuf_h, op=MPI.SUM)
+            else:
+                raise ValueError(f"Invalid backend {backend}. Choose either 'nccl' or 'mpi'.")
+        elif device == "xpu":
+            if backend == "mpi":
+                sendbuf_h = dnp.asnumpy(sendbuf)
+                recvbuf_h = dnp.asnumpy(recvbuf)
+                comm.Allreduce(sendbuf_h, recvbuf_h, op=MPI.SUM)
+            else:
+                raise ValueError(f"Invalid backend {backend}. Choose 'mpi'.")
+        else:
+            raise ValueError(f"Invalid device {device}. Choose either 'cpu', 'cuda', or 'xpu'.")
     
-def MPIallGather(device, data_size):
+def MPIallGather(device:str, data_size:tuple=(32,32), backend:str="mpi"):
     init_mpi()
     xp = get_device_module(device)
     if not MPI4PY_AVAILABLE:
-        raise ImportError("mpi4py is not installed. Install mpi4py to perform allreduce.")
+        raise ImportError("mpi4py is not installed. Install mpi4py to perform allgather.")
     else:
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         size = comm.Get_size()
 
         sendbuf = xp.empty(data_size, dtype=xp.float32)
-        recvbuf = xp.empty(data_size * size, dtype=xp.float32)
+        recvbuf = xp.empty(tuple([data_size[i] for i in range(len(data_size)-1)] + [data_size[-1] * size]), dtype=xp.float32)
 
         if device == "cpu":
             comm.Allgather(sendbuf, recvbuf)
 
-        elif device == "gpu":
-            uid = nccl.get_unique_id()
-            comm_nccl = nccl.NcclCommunicator(size, uid, rank)
-            comm_nccl.allGather(sendbuf.data.ptr, recvbuf.data.ptr, data_size, nccl.NCCL_FLOAT32, cp.cuda.Stream.null)
-            cp.cuda.Stream.null.synchronize()
+        elif device == "cuda":
+            if backend == "mpi":
+                sendbuf_h = cp.asnumpy(sendbuf)
+                recvbuf_h = cp.asnumpy(recvbuf)
+                comm.Allgather(sendbuf_h, recvbuf_h)
+            elif backend == "nccl":
+                uid = nccl.get_unique_id()
+                comm_nccl = nccl.NcclCommunicator(size, uid, rank)
+                comm_nccl.allGather(sendbuf.data.ptr, recvbuf.data.ptr, data_size, nccl.NCCL_FLOAT32, cp.cuda.Stream.null)
+                cp.cuda.Stream.null.synchronize()
+            else:
+                raise ValueError(f"Invalid backend {backend}. Choose either 'nccl' or 'mpi'.")
+        elif device == "xpu":
+            if backend == "mpi":
+                sendbuf_h = dnp.asnumpy(sendbuf)
+                recvbuf_h = dnp.asnumpy(recvbuf)
+                comm.Allgather(sendbuf_h, recvbuf_h)
+            else:
+                raise ValueError(f"Invalid backend {backend}. Choose 'mpi'.")
+        else:   
+            raise ValueError(f"Invalid device {device}. Choose either 'cpu', 'cuda', or 'xpu'.")
 
 
 #################
 #data movement
 #################
 
-def dataCopyH2D(data_size):
-    if not CUPY_AVAILABLE:
-        raise ImportError("CuPy is not installed. Install CuPy to use GPU capabilities.")
+def dataCopyH2D(data_size:tuple=(32,32,32)):
+    if not CUPY_AVAILABLE and not DPNP_AVAILABLE:
+        raise ImportError("CuPy or DPNP is not installed.")
+
+    # Allocate array on the host (CPU)
+    # Then transfer to the selected device
+    data_h = np.empty(data_size, dtype=np.float32)
+    if DPNP_AVAILABLE:
+        data_d = dnp.array(data_h)
     else:
-        data_h = np.empty(data_size, dtype=np.float32)
         data_d = cp.asarray(data_h)
 
-def dataCopyD2H(data_size):
-    if not CUPY_AVAILABLE:
-        raise ImportError("CuPy is not installed. Install CuPy to use GPU capabilities.")
+def dataCopyD2H(data_size:tuple=(32,32,32)):
+    if not CUPY_AVAILABLE and not DPNP_AVAILABLE:
+        raise ImportError("CuPy or DPNP is not installed.")
+
+    if DPNP_AVAILABLE:
+        data_d = dnp.empty(data_size, dtype=dnp.float32)
+        data_h = dnp.asnumpy(data_d)
     else:
         data_d = cp.empty(data_size, dtype=cp.float32)
         data_h = cp.asnumpy(data_d)
@@ -251,19 +288,19 @@ def dataCopyD2H(data_size):
 #computation
 #################
 
-def matMulSimple2D(device:str, size:tuple):
+def matMulSimple2D(device:str, size:tuple=(32,32,32)):
     xp = get_device_module(device)
     matrix_a = xp.empty(size, dtype=xp.float32)
     matrix_b = xp.empty(size, dtype=xp.float32)
     matrix_c = xp.matmul(matrix_a, matrix_b)
 
-def matMulGeneral(device:str, size_a:tuple, size_b:tuple, axis: int | tuple = 2):
+def matMulGeneral(device:str, size_a:tuple=(32,32,32), size_b:tuple=(32,32,32), axis: int | tuple = 2):
     xp = get_device_module(device)
     matrix_a = xp.empty(size_a, dtype=xp.float32)
     matrix_b = xp.empty(size_b, dtype=xp.float32)
     matrix_c = xp.tensordot(matrix_a, matrix_b, axis)
 
-def fft(device:str, data_size:tuple, type_in:str, transform_dim):
+def fft(device:str, data_size:tuple=(32,32,32), type_in:str="float", transform_dim:int=-1):
     xp = get_device_module(device)
     if type_in == "float":
         data_in = xp.empty(data_size, dtype=xp.float32)
@@ -279,34 +316,42 @@ def fft(device:str, data_size:tuple, type_in:str, transform_dim):
     out = xp.fft.fft(data_in, axis=transform_dim)
 
     
-def axpy(device:str, size:tuple):
+def axpy(device:str, size:tuple=(32,32,32)):
     xp = get_device_module(device)
     x = xp.empty(size, dtype=xp.float32)
     y = xp.empty(size, dtype=xp.float32)
     y += 1.01 * x
 
-def implaceCompute(device:str, size:tuple, num_op:int, op):
+
+def implaceCompute(device:str, size:tuple=(32,32,32), op = "exp"):
     xp = get_device_module(device)
     x = xp.empty(size, dtype=xp.float32)
-    # Ensure op is a callable
-    if not callable(op):
-        raise ValueError("Operator must be a callable function.")
-    
-    for _ in range(num_op):
-        x = op(x)
+    # op can be either a string identifier or a Python callable
+    if isinstance(op,str):
+        if op == "exp":
+            op_func = xp.exp
+        else:
+            raise ValueError(f"Unknown operator {op}.")
+    else:
+        if not callable(op):
+            raise ValueError("Operator must be a callable function.")
+        else:
+            op_func = op
 
-def generateRandomNumber(device:str, size:tuple):
+    x = op_func(x)
+
+def generateRandomNumber(device:str, size:tuple=(32,32,32)):
     xp = get_device_module(device)
-    x = xp.random.rand(size)
+    x = xp.random.rand(*size)
 
-def scatterAdd(device, x_size, y_size):
+def scatterAdd(device:str, x_size:tuple=(32,32,32), y_size:str=(32,32,32)):
     xp = get_device_module(device)
     y = xp.empty(y_size, dtype=xp.float32)
     x = xp.empty(x_size, dtype=xp.float32)
     idx = xp.empty(y_size, dtype=xp.int)
-    if xp == np:
+    if device.lower() == "cpu":
         y += x[idx]
-    elif xp == cp:
+    elif device.lower() == "cuda":
         scatter_add_kernel = cp.RawKernel(r'''
         extern "C" __global__
         void my_scatter_add_kernel(const float *x, const float *y, const int *idx)
@@ -317,6 +362,5 @@ def scatterAdd(device, x_size, y_size):
         ''', 'my_scatter_add_kernel')
 
 #for the tutorial, three things:
-#exalearn (CPU + GPU v1), ddmd v1, how to build wk-miniapp
+#exalearn (CPU + cuda v1), ddmd v1, how to build wk-miniapp
 #show installation script + run script, in installation script, show how to install assuming we are working in a brand new env (container for example)
-
