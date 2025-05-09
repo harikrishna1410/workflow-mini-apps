@@ -1,0 +1,18 @@
+{
+    "kernels":[
+        {
+            "name":"rhs_compute",
+            "run_time":5.0,
+            "data_size":[512,512],
+            "mini_app_kernel":"MatMulGeneral",
+            "device":"cpu"
+        },
+        {
+            "name":"explicit_integrate",
+            "run_time":1.0,
+            "data_size":[512,512],
+            "mini_app_kernel":"MatMulGeneral",
+            "device":"cpu"
+        }
+    ]
+}

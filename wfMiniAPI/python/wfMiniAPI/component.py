@@ -13,8 +13,7 @@ class Component:
         if self.config["type"] == "filesystem":
             # Ensure that tmp directory is empty
             dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
-            if os.path.exists(dirname):
-                shutil.rmtree(dirname)
+            os.makedirs(dirname, exist_ok=True)
         
         # Setup logging
         self.logger = logging.getLogger(name)
@@ -156,6 +155,9 @@ class Component:
             # Path to the SQLite database
             db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
 
+            if not os.path.exists(db_path):
+                self.logger.error(f"Database {db_path} does not exist")
+                raise AssertionError(f"Database {db_path} does not exist")
             # Connect to the database and retrieve the filename for the key
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -170,12 +172,81 @@ class Component:
                 raise ValueError(f"Key {key} not found in the staging database")
 
             filename = row[0]
-
+            if not os.path.exists(filename):
+                self.logger.error(f"File {filename} does not exist")
+                raise AssertionError(f"File {filename} does not exist")
             # Load the data from the file
             with open(filename, "rb") as f:
                 data = pickle.load(f)
                 self.logger.info(f"Read staged data for {key} from {filename}")
                 return data
+        else:
+            self.logger.error("Unsupported data transport type")
+            raise ValueError("Unsupported data transport type")
+    
+    def poll_staged_data(self,key):
+        """
+        Function checks if the data for the key is staged.
+        It returns True if the data is staged, otherwise False.
+        """
+        if self.config["type"] == "filesystem":
+            # Path to the SQLite database
+            db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
+
+            if not os.path.exists(db_path):
+                return False
+            # Connect to the database and check if the key exists
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # Query the database for the filename associated with the key
+            cursor.execute("SELECT filename FROM staging WHERE key=?", (key,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if row is None:
+                return False
+            else:
+                return True
+        else:
+            self.logger.error("Unsupported data transport type")
+            raise ValueError("Unsupported data transport type")
+        
+    def clean_staged_data(self,key):
+        """
+        Function clears the staging area for the given key.
+        It removes the key-filename mapping from the database and deletes the file.
+        """
+        if self.config["type"] == "filesystem":
+            # Path to the SQLite database
+            db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
+
+            # Connect to the database and delete the key-filename mapping
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            # Query the database for the filename associated with the key
+            cursor.execute("SELECT filename FROM staging WHERE key=?", (key,))
+            row = cursor.fetchone()
+
+            if row is None:
+                self.logger.error(f"Key {key} not found in the staging database")
+                raise ValueError(f"Key {key} not found in the staging database")
+
+            filename = row[0]
+
+            # Delete the key-filename mapping from the database
+            cursor.execute("DELETE FROM staging WHERE key=?", (key,))
+            conn.commit()
+            conn.close()
+
+            # Delete the file
+            if os.path.exists(filename):
+                os.remove(filename)
+                self.logger.info(f"Cleared staged data for {key} and deleted file {filename}")
+            else:
+                self.logger.error(f"File {filename} does not exist")
+                raise ValueError(f"File {filename} does not exist")
         else:
             self.logger.error("Unsupported data transport type")
             raise ValueError("Unsupported data transport type")
@@ -186,3 +257,14 @@ class Component:
 
     def __repr__(self):
         return f"<WorkflowNode name={self.name}>"
+    
+    def clean(self):
+        """Clean up the component."""
+        if self.config["type"] == "filesystem":
+            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+            if os.path.exists(dirname):
+                shutil.rmtree(dirname)
+                self.logger.info(f"Cleaned up directory {dirname}")
+        else:
+            self.logger.error("Unsupported data transport type")
+            raise ValueError("Unsupported data transport type")

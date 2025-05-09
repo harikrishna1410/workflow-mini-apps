@@ -4,8 +4,8 @@ import time
 from wfMiniAPI.kernel import get_kernel_from_string
 
 class Simulation(Component):
-    def __init__(self,name="SIM",comm=None):
-        super().__init__(name)
+    def __init__(self,name="SIM",comm=None,config:dict={"type":"filesystem"}):
+        super().__init__(name,config=config)
         self.name = name
         self.comm = comm
         self.kernels = []
@@ -24,14 +24,17 @@ class Simulation(Component):
         kernels = data.get('kernels', [])
         for kernel in kernels:
             name = kernel.get('name')
+            mini_app_kernel = kernel.get('mini_app_kernel', 'MatMulSimple2D')
             run_count = kernel.get('run_count', 1)
             data_size = tuple(kernel.get('data_size', [32, 32, 32]))
             device = kernel.get('device', 'cpu')
-            self.add_kernel(name, device=device, data_size=data_size, run_count=run_count)
+            self.add_kernel(name, mini_app_kernel=mini_app_kernel, device=device, data_size=data_size, run_count=run_count)
+            if "run_time" in kernel:
+                self.set_kernel_run_count_by_time(name, kernel["run_time"])
 
-    def add_kernel(self, name:str, device:str="cpu", data_size:tuple=(32,32,32), run_count:int=1):
+    def add_kernel(self, name:str, mini_app_kernel:str="MatMulSimple2D", device:str="cpu", data_size:tuple=(32,32,32), run_count:int=1):
         """Add a kernel to the simulation."""
-        kernel_func = get_kernel_from_string(name)
+        kernel_func = get_kernel_from_string(mini_app_kernel)
         self.kernels.append({
             'name': name,
             'func': kernel_func,
@@ -57,9 +60,9 @@ class Simulation(Component):
             if k['name'] == name:
                 k['data_size'] = data_size
 
-    def run(self, n_steps:int=1):
+    def run(self, nsteps:int=1):
         """Run all kernels in sequence for the specified total_time."""
-        for _ in range(n_steps):
+        for _ in range(nsteps):
             for k in self.kernels:
                 for _ in range(k['run_count']):
                     if k['data_size'] is not None:

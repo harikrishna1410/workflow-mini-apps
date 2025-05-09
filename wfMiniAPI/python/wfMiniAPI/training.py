@@ -90,6 +90,7 @@ def train(model, dataloader, criterion, optimizer, device, num_epochs=10,ddp=Fal
 class AI(Component):
     def __init__(self,
                  name = "AI", 
+                 config:dict = {"type":"filesystem"},
                 model_type="feedforward", 
                 dropout=0.1, 
                 use_batchnorm=True, 
@@ -106,7 +107,7 @@ class AI(Component):
                 device="cpu",
                 ddp=False, 
                 comm=None):
-        super().__init__(name)
+        super().__init__(name,config=config)
         self.name = name
         self.model_type = model_type
         self.loss_type = loss_type
