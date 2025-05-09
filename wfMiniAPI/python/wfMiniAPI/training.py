@@ -15,6 +15,7 @@ import time
 import socket
 import sys
 import os
+import datetime
 
 class SimpleFeedForwardNet(nn.Module):
     def __init__(self, 
@@ -184,11 +185,11 @@ class AI(Component):
                     os.environ['WORLD_SIZE'] = str(self.world_size)
                     os.environ['RANK'] = str(self.local_rank)
                     if self.device == 'cuda':
-                        torch.distributed.init_process_group(backend='nccl', init_method='env://')
+                        torch.distributed.init_process_group(backend='nccl', init_method='env://', timeout=datetime.timedelta(seconds=30))
                     elif self.device == 'xpu':
-                        torch.distributed.init_process_group(backend='ccl', init_method='env://')
+                        torch.distributed.init_process_group(backend='ccl', init_method='env://', timeout=datetime.timedelta(seconds=30))
                     else:
-                        torch.distributed.init_process_group(backend='gloo', init_method='env://')
+                        torch.distributed.init_process_group(backend='gloo', init_method='env://', timeout=datetime.timedelta(seconds=30))
                 model = torch.nn.parallel.DistributedDataParallel(model)
             if self.device != 'cpu':
                 model.to(self.device)

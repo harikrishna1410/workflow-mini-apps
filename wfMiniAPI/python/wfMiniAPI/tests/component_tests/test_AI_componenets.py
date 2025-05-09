@@ -1,5 +1,6 @@
 from wfMiniAPI.training import AI
 import subprocess
+import torch
 
 
 def test_ai_cpu():
@@ -10,13 +11,23 @@ def test_ai_cpu():
 
 def test_ai_gpu():
     try:
-        ai_component = AI(num_hidden_layers=2,device="cuda")
-        ai_component.train()
-        ai_component.infer()
+        if torch.cuda.is_available():
+            ai_component = AI(num_hidden_layers=2,device="cuda")
+            ai_component.train()
+            ai_component.infer()
+        else:
+            print("CUDA is not available. Skipping GPU tests.")
     except:
-        ai_component = AI(num_hidden_layers=2,device="xpu")
-        ai_component.train()
-        ai_component.infer()
+        if not hasattr(torch, 'xpu'):
+            print("Intel XPU is not available in this PyTorch installation. Skipping XPU tests.")
+            return
+        if torch.xpu.is_available():
+            ai_component = AI(num_hidden_layers=2,device="xpu")
+            ai_component.train()
+            ai_component.infer()
+        else:
+            print("Intel XPU is not available. Skipping XPU tests.")
+            return
     return
 
 def test_ai_ddp():
@@ -25,13 +36,22 @@ def test_ai_ddp():
     assert result.returncode == 0, f"Distributed AI component failed to execute. Error: {result.stderr}"
 
     try:
-        cmd = "mpirun -n 4 python3 -c " + f"'from mpi4py import MPI;from wfMiniAPI.training import AI;comm = MPI.COMM_WORLD;AI(num_hidden_layers=2,ddp=True,device=\"cuda\",comm=comm).train()'"
-        result = subprocess.run(cmd, shell=True, capture_output=True)
-        assert result.returncode == 0, f"Distributed AI component failed to execute. Error: {result.stderr}"
+        if torch.cuda.is_available():
+            cmd = "mpirun -n 4 python3 -c " + f"'from mpi4py import MPI;from wfMiniAPI.training import AI;comm = MPI.COMM_WORLD;AI(num_hidden_layers=2,ddp=True,device=\"cuda\",comm=comm).train()'"
+            result = subprocess.run(cmd, shell=True, capture_output=True)
+            assert result.returncode == 0, f"Distributed AI component failed to execute. Error: {result.stderr}"
+        else:
+            print("CUDA is not available. Skipping GPU tests.")
     except:
-        cmd = "mpirun -n 4 python3 -c " + f"'from mpi4py import MPI;from wfMiniAPI.training import AI;comm = MPI.COMM_WORLD;AI(num_hidden_layers=2,ddp=True,device=\"xpu\",comm=comm).train()'"
-        result = subprocess.run(cmd, shell=True, capture_output=True)
-        assert result.returncode == 0, f"Distributed AI component failed to execute. Error: {result.stderr}"
+        if not hasattr(torch, 'xpu'):
+            print("Intel XPU is not available in this PyTorch installation. Skipping XPU tests.")
+            return
+        if torch.xpu.is_available():
+            cmd = "mpirun -n 4 python3 -c " + f"'from mpi4py import MPI;from wfMiniAPI.training import AI;comm = MPI.COMM_WORLD;AI(num_hidden_layers=2,ddp=True,device=\"xpu\",comm=comm).train()'"
+            result = subprocess.run(cmd, shell=True, capture_output=True)
+            assert result.returncode == 0, f"Distributed AI component failed to execute. Error: {result.stderr}"
+        else:
+            print("Intel XPU is not available. Skipping XPU tests.")
 
     return
 

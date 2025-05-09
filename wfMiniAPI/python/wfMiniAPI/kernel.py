@@ -60,12 +60,13 @@ def init_mpi():
 #################
 
 def writeSingleRank(num_bytes, data_root_dir):
-    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
         raise ImportError("h5py is not installed. Install h5py to use read/write.")
     else:
+        if not MPI.Is_initialized():
+            raise RuntimeError("MPI is not initialized. Please initialize MPI before calling this function.")
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
 
@@ -80,12 +81,13 @@ def writeSingleRank(num_bytes, data_root_dir):
 
 
 def writeNonMPI(num_bytes, data_root_dir, filename_suffix=None):
-    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
         raise ImportError("h5py is not installed. Install h5py to use read/write.")
     else:
+        if not MPI.Is_initialized():
+            raise RuntimeError("MPI is not initialized. Please initialize MPI before calling this function.")
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
 
@@ -102,12 +104,13 @@ def writeNonMPI(num_bytes, data_root_dir, filename_suffix=None):
             dset = f.create_dataset("data", data = data)
 
 def writeWithMPI(num_bytes, data_root_dir, filename_suffix=None):
-    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
         raise ImportError("h5py is not installed. Install h5py to use read/write.")
     else:
+        if not MPI.Is_initialized():
+            raise RuntimeError("MPI is not initialized. Please initialize MPI before calling this function.")
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         size = comm.Get_size()
@@ -128,12 +131,13 @@ def writeWithMPI(num_bytes, data_root_dir, filename_suffix=None):
             dset[offset:offset+num_elem] = data
 
 def readNonMPI(num_bytes, data_root_dir, filename_suffix=None):
-    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
         raise ImportError("h5py is not installed. Install h5py to use read/write.")
     else:
+        if not MPI.Is_initialized():
+            raise RuntimeError("MPI is not initialized. Please initialize MPI before calling this function.")
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
 
@@ -149,12 +153,13 @@ def readNonMPI(num_bytes, data_root_dir, filename_suffix=None):
             data = f['data'][0:num_elem] 
 
 def readWithMPI(num_bytes, data_root_dir, filename_suffix=None):
-    init_mpi()
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to use multi-process read/write.")
     elif not H5PY_AVAILABLE:
         raise ImportError("h5py is not installed. Install h5py to use read/write.")
     else:
+        if not MPI.Is_initialized():
+            raise RuntimeError("MPI is not initialized. Please initialize MPI before calling this function.")
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         size = comm.Get_size()
@@ -180,11 +185,12 @@ def readWithMPI(num_bytes, data_root_dir, filename_suffix=None):
 #################
 
 def MPIallReduce(device:str, data_size:tuple=(32,32), backend:str="mpi"):
-    init_mpi()
     xp = get_device_module(device)
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to perform allreduce.")
     else:
+        if not MPI.Is_initialized():
+            raise RuntimeError("MPI is not initialized. Please initialize MPI before calling this function.")
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         size = comm.Get_size()
@@ -218,11 +224,12 @@ def MPIallReduce(device:str, data_size:tuple=(32,32), backend:str="mpi"):
             raise ValueError(f"Invalid device {device}. Choose either 'cpu', 'cuda', or 'xpu'.")
     
 def MPIallGather(device:str, data_size:tuple=(32,32), backend:str="mpi"):
-    init_mpi()
     xp = get_device_module(device)
     if not MPI4PY_AVAILABLE:
         raise ImportError("mpi4py is not installed. Install mpi4py to perform allgather.")
     else:
+        if not MPI.Is_initialized():
+            raise RuntimeError("MPI is not initialized. Please initialize MPI before calling this function.")
         comm = MPI.COMM_WORLD
         rank = comm.Get_rank()
         size = comm.Get_size()
@@ -288,79 +295,116 @@ def dataCopyD2H(data_size:tuple=(32,32,32)):
 #computation
 #################
 
-def matMulSimple2D(device:str, size:tuple=(32,32,32)):
-    xp = get_device_module(device)
-    matrix_a = xp.empty(size, dtype=xp.float32)
-    matrix_b = xp.empty(size, dtype=xp.float32)
-    matrix_c = xp.matmul(matrix_a, matrix_b)
+from abc import ABC, abstractmethod
+from typing import Callable, Tuple, Union, Any
 
-def matMulGeneral(device:str, size_a:tuple=(32,32,32), size_b:tuple=(32,32,32), axis: int | tuple = 2):
-    xp = get_device_module(device)
-    matrix_a = xp.empty(size_a, dtype=xp.float32)
-    matrix_b = xp.empty(size_b, dtype=xp.float32)
-    matrix_c = xp.tensordot(matrix_a, matrix_b, axis)
+class ComputeKernel(ABC):
+    """ This ia base class for all compute kernels."""
+    @abstractmethod
+    def __call__(self, device:str, data_size:tuple=(32,32,32),**kwargs) -> Any:
+        """
+        This method should be implemented by subclasses to define the kernel's behavior.
+        :param device: The device to use for computation (e.g., 'cpu', 'cuda', 'xpu').
+        :param data_size: The size of the data to be processed.
+        :param kwargs: Additional arguments for the kernel.
+        :return: The result of the computation.
+        """
+        pass
 
-def fft(device:str, data_size:tuple=(32,32,32), type_in:str="float", transform_dim:int=-1):
-    xp = get_device_module(device)
-    if type_in == "float":
-        data_in = xp.empty(data_size, dtype=xp.float32)
-    elif type_in == "double":
-        data_in = xp.empty(data_size, dtype=xp.float64)
-    elif type_in == "complexF":
-        data_in = xp.empty(data_size, dtype=xp.complex64)
-    elif type_in == "complexD":
-        data_in = xp.empty(data_size, dtype=xp.complex128)
-    else:
-        raise TypeError("In fft call, type_in must be one of the following: [float, double, complexF, complexD]")
+class MatMulSimple2D(ComputeKernel):
+    def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
+        xp = get_device_module(device)
+        matrix_a = xp.empty(data_size, dtype=xp.float32)
+        matrix_b = xp.empty(data_size, dtype=xp.float32)
+        return xp.matmul(matrix_a, matrix_b)
 
-    out = xp.fft.fft(data_in, axis=transform_dim)
+class MatMulGeneral(ComputeKernel):
+    def __call__(self, device: str, data_size: tuple = (32, 32, 32), axis: int | tuple = 2, **kwargs):
+        xp = get_device_module(device)
+        matrix_a = xp.empty(data_size, dtype=xp.float32)
+        matrix_b = xp.empty(data_size, dtype=xp.float32)
+        return xp.tensordot(matrix_a, matrix_b, axis)
 
-    
-def axpy(device:str, size:tuple=(32,32,32)):
-    xp = get_device_module(device)
-    x = xp.empty(size, dtype=xp.float32)
-    y = xp.empty(size, dtype=xp.float32)
-    y += 1.01 * x
-
-
-def implaceCompute(device:str, size:tuple=(32,32,32), op = "exp"):
-    xp = get_device_module(device)
-    x = xp.empty(size, dtype=xp.float32)
-    # op can be either a string identifier or a Python callable
-    if isinstance(op,str):
-        if op == "exp":
-            op_func = xp.exp
+class FFT(ComputeKernel):
+    def __call__(self, device: str, data_size: tuple = (32, 32, 32), type_in: str = "float", transform_dim: int = -1, **kwargs):
+        xp = get_device_module(device)
+        if type_in == "float":
+            data_in = xp.empty(data_size, dtype=xp.float32)
+        elif type_in == "double":
+            data_in = xp.empty(data_size, dtype=xp.float64)
+        elif type_in == "complexF":
+            data_in = xp.empty(data_size, dtype=xp.complex64)
+        elif type_in == "complexD":
+            data_in = xp.empty(data_size, dtype=xp.complex128)
         else:
-            raise ValueError(f"Unknown operator {op}.")
-    else:
-        if not callable(op):
-            raise ValueError("Operator must be a callable function.")
+            raise TypeError("In fft call, type_in must be one of the following: [float, double, complexF, complexD]")
+        
+        return xp.fft.fft(data_in, axis=transform_dim)
+
+class AXPY(ComputeKernel):
+    def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
+        xp = get_device_module(device)
+        x = xp.empty(data_size, dtype=xp.float32)
+        y = xp.empty(data_size, dtype=xp.float32)
+        y += 1.01 * x
+        return y
+
+class InplaceCompute(ComputeKernel):
+    def __call__(self, device: str, data_size: tuple = (32, 32, 32), op="exp", **kwargs):
+        xp = get_device_module(device)
+        x = xp.empty(data_size, dtype=xp.float32)
+        # op can be either a string identifier or a Python callable
+        if isinstance(op, str):
+            if op == "exp":
+                op_func = xp.exp
+            else:
+                raise ValueError(f"Unknown operator {op}.")
         else:
-            op_func = op
+            if not callable(op):
+                raise ValueError("Operator must be a callable function.")
+            else:
+                op_func = op
 
-    x = op_func(x)
+        return op_func(x)
 
-def generateRandomNumber(device:str, size:tuple=(32,32,32)):
-    xp = get_device_module(device)
-    x = xp.random.rand(*size)
+class GenerateRandomNumber(ComputeKernel):
+    def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
+        xp = get_device_module(device)
+        return xp.random.rand(*data_size)
 
-def scatterAdd(device:str, x_size:tuple=(32,32,32), y_size:str=(32,32,32)):
-    xp = get_device_module(device)
-    y = xp.empty(y_size, dtype=xp.float32)
-    x = xp.empty(x_size, dtype=xp.float32)
-    idx = xp.empty(y_size, dtype=xp.int)
-    if device.lower() == "cpu":
-        y += x[idx]
-    elif device.lower() == "cuda":
-        scatter_add_kernel = cp.RawKernel(r'''
-        extern "C" __global__
-        void my_scatter_add_kernel(const float *x, const float *y, const int *idx)
-        {
-            int tid = blockDim.x * blockIdx.x + threadIdx.x;
-
+class ScatterAdd(ComputeKernel):
+    def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
+        xp = get_device_module(device)
+        y = xp.empty(xp.prod(data_size), dtype=xp.float32)
+        x = xp.empty(xp.prod(data_size), dtype=xp.float32)
+        idx = xp.random.randint(0, xp.prod(data_size), size=xp.prod(data_size), dtype=xp.int32)
+        if device.lower() == "cpu":
+            y += x[idx]
+        elif device.lower() == "cuda":
+            scatter_add_kernel = cp.RawKernel(r'''
+            extern "C" __global__
+            void my_scatter_add_kernel(const float *x, const float *y, const int *idx)
+            {
+                int tid = blockDim.x * blockIdx.x + threadIdx.x;
+                // Implementation needed
             }
-        ''', 'my_scatter_add_kernel')
+            ''', 'my_scatter_add_kernel')
+            # Implementation needed
+        return y
 
-#for the tutorial, three things:
-#exalearn (CPU + cuda v1), ddmd v1, how to build wk-miniapp
-#show installation script + run script, in installation script, show how to install assuming we are working in a brand new env (container for example)
+def get_kernel_from_string(kernel_name: str):
+    kernel_name_lower = kernel_name.lower()
+    # Loop through all compute kernel subclasses
+    for kernel_class in ComputeKernel.__subclasses__():
+        if kernel_name_lower == kernel_class.__name__.lower():
+            return kernel_class()
+    
+    # If no match found
+    raise ValueError(f"Unknown kernel name {kernel_name}.")
+
+def get_all_compute_kernels():
+    """
+    Returns a list of all compute kernels.
+    """
+    return [kernel_class() for kernel_class in ComputeKernel.__subclasses__()]
+

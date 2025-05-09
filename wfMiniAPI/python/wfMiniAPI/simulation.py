@@ -1,6 +1,7 @@
 import json
-from .component import Component
+from wfMiniAPI.component import Component
 import time
+from wfMiniAPI.kernel import get_kernel_from_string
 
 class Simulation(Component):
     def __init__(self,name="SIM",comm=None):
@@ -16,13 +17,27 @@ class Simulation(Component):
             self.size = 1
             self.rank = 0
 
-    def add_kernel(self, name:str, kernel_func, run_count:int=1, data_size:tuple=(32,32,32)):
+    def init_from_json(self, json_file):
+        """Initialize the simulation from a JSON file."""
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        kernels = data.get('kernels', [])
+        for kernel in kernels:
+            name = kernel.get('name')
+            run_count = kernel.get('run_count', 1)
+            data_size = kernel.get('data_size', (32, 32, 32))
+            device = kernel.get('device', 'cpu')
+            self.add_kernel(name, device=device, data_size=data_size, run_count=run_count)
+
+    def add_kernel(self, name:str, device:str="cpu", data_size:tuple=(32,32,32), run_count:int=1):
         """Add a kernel to the simulation."""
+        kernel_func = get_kernel_from_string(name)
         self.kernels.append({
             'name': name,
             'func': kernel_func,
             'run_count': run_count,
-            'data_size': data_size
+            'data_size': data_size,
+            'device': device
         })
         self.ktoi[name] = len(self.kernels) - 1
 
@@ -42,14 +57,15 @@ class Simulation(Component):
             if k['name'] == name:
                 k['data_size'] = data_size
 
-    def run(self):
+    def run(self, n_steps:int=1):
         """Run all kernels in sequence for the specified total_time."""
-        for k in self.kernels:
-            for _ in range(k['run_count']):
-                if k['data_size'] is not None:
-                    k['func'](k['data_size'])
-                else:
-                    k['func']()
+        for _ in range(n_steps):
+            for k in self.kernels:
+                for _ in range(k['run_count']):
+                    if k['data_size'] is not None:
+                        k['func'](k['device'], k['data_size'])
+                    else:
+                        k['func'](k['device'])
             if self.comm is not None:
                 self.comm.Barrier()
     
