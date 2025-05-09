@@ -35,19 +35,19 @@ class Component:
         # Add handler to logger
         self.logger.addHandler(file_handler)
         
-        self.logger.info(f"Component {name} initialized with config {config}")
+        self.logger.debug(f"Component {name} initialized with config {config}")
 
     def connect(self, other_node):
         """Connect this node to another node."""
         if other_node not in self.connections:
             self.connections.append(other_node)
-            self.logger.info(f"Connected to {other_node.name}")
+            self.logger.debug(f"Connected to {other_node.name}")
 
     def disconnect(self, other_node):
         """Disconnect this node from another node."""
         if other_node in self.connections:
             self.connections.remove(other_node)
-            self.logger.info(f"Disconnected from {other_node.name}")
+            self.logger.debug(f"Disconnected from {other_node.name}")
 
     def send(self, data, targets:list=None):
         """
@@ -55,7 +55,7 @@ class Component:
         :param data: The data to send.
         """
         targets = targets or self.connections
-        self.logger.info(f"Sending data: {data}")
+        self.logger.debug(f"Sending data: {data}")
         
         if self.config["type"] == "filesystem":
             dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
@@ -64,7 +64,7 @@ class Component:
                 filename = os.path.join(dirname, f"{self.name}_{target.name}_data.pickle")
                 with open(filename, "wb") as f:
                     pickle.dump(data, f)
-                self.logger.info(f"Data sent to {target.name} at {filename}")
+                self.logger.debug(f"Data sent to {target.name} at {filename}")
         else:
             self.logger.error("Unsupported data transport type")
             raise ValueError("Unsupported data transport type")
@@ -92,7 +92,7 @@ class Component:
                     
                 with open(filename, "rb") as f:
                     data[sender.name] = pickle.load(f)
-                    self.logger.info(f"Received data from {sender.name}")
+                    self.logger.debug(f"Received data from {sender.name}")
         else:
             self.logger.error("Unsupported data transport type")
             raise ValueError("Unsupported data transport type")
@@ -135,7 +135,7 @@ class Component:
             try:
                 cursor.execute("INSERT INTO staging (key, filename) VALUES (?, ?)", (key, filename))
                 conn.commit()
-                self.logger.info(f"Staged data for {key} at {filename} and recorded in database {db_path}")
+                self.logger.debug(f"Staged data for {key} at {filename} and recorded in database {db_path}")
             except sqlite3.IntegrityError:
                 self.logger.error(f"Key {key} already exists in the staging database")
                 raise ValueError(f"Key {key} already exists")
@@ -178,7 +178,7 @@ class Component:
             # Load the data from the file
             with open(filename, "rb") as f:
                 data = pickle.load(f)
-                self.logger.info(f"Read staged data for {key} from {filename}")
+                self.logger.debug(f"Read staged data for {key} from {filename}")
                 return data
         else:
             self.logger.error("Unsupported data transport type")
@@ -243,7 +243,7 @@ class Component:
             # Delete the file
             if os.path.exists(filename):
                 os.remove(filename)
-                self.logger.info(f"Cleared staged data for {key} and deleted file {filename}")
+                self.logger.debug(f"Cleared staged data for {key} and deleted file {filename}")
             else:
                 self.logger.error(f"File {filename} does not exist")
                 raise ValueError(f"File {filename} does not exist")
@@ -264,7 +264,7 @@ class Component:
             dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
             if os.path.exists(dirname):
                 shutil.rmtree(dirname)
-                self.logger.info(f"Cleaned up directory {dirname}")
+                self.logger.debug(f"Cleaned up directory {dirname}")
         else:
             self.logger.error("Unsupported data transport type")
             raise ValueError("Unsupported data transport type")
