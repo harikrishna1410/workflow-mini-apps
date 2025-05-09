@@ -25,7 +25,7 @@ class Simulation(Component):
         for kernel in kernels:
             name = kernel.get('name')
             run_count = kernel.get('run_count', 1)
-            data_size = kernel.get('data_size', (32, 32, 32))
+            data_size = tuple(kernel.get('data_size', [32, 32, 32]))
             device = kernel.get('device', 'cpu')
             self.add_kernel(name, device=device, data_size=data_size, run_count=run_count)
 
