@@ -368,6 +368,12 @@ def get_comm_kernel_from_string(kernel_name: str):
     
     raise ValueError(f"Unknown communication kernel name {kernel_name}.")
 
+def get_all_comm_kernel_names():
+    """
+    Returns a list of all collective communication kernel names.
+    """
+    return [kernel_class.__name__ for kernel_class in CollectiveCommKernel.__subclasses__()]
+
 def get_all_comm_kernels():
     """
     Returns a list of all collective communication kernels.
@@ -440,6 +446,12 @@ def get_copy_kernel_from_string(kernel_name: str):
     
     raise ValueError(f"Unknown copy kernel name {kernel_name}.")
 
+
+def get_all_copy_kernel_names():
+    """
+    Returns a list of all copy kernel names.
+    """
+    return [kernel_class.__name__ for kernel_class in CopyKernel.__subclasses__()]
 
 def get_all_copy_kernels():
     """
@@ -557,7 +569,7 @@ class ScatterAdd(ComputeKernel):
             # Implementation needed
         return y
 
-def get_kernel_from_string(kernel_name: str):
+def get_compute_kernel_from_string(kernel_name: str):
     kernel_name_lower = kernel_name.lower()
     # Loop through all compute kernel subclasses
     for kernel_class in ComputeKernel.__subclasses__():
@@ -567,9 +579,30 @@ def get_kernel_from_string(kernel_name: str):
     # If no match found
     raise ValueError(f"Unknown kernel name {kernel_name}.")
 
+def get_all_compute_kernel_names():
+    """
+    Returns a list of all compute kernel names.
+    """
+    return [kernel_class.__name__ for kernel_class in ComputeKernel.__subclasses__()]
+
 def get_all_compute_kernels():
     """
     Returns a list of all compute kernels.
     """
     return [kernel_class() for kernel_class in ComputeKernel.__subclasses__()]
 
+
+def get_kernel_from_string(kernel_name: str):
+    """
+    Returns a kernel object based on the kernel name.
+    """
+    compute_kernel_names = [i.lower() for i in get_all_compute_kernel_names()]
+    io_kernel_names = [i.lower() for i in get_all_io_kernel_names()]
+    comm_kernel_names = [i.lower() for i in get_all_comm_kernel_names()]
+    copy_kernel_names = [i.lower() for i in get_all_copy_kernel_names()]
+
+    for kernal_names,f in zip([compute_kernel_names, io_kernel_names, comm_kernel_names, copy_kernel_names], 
+                                    [get_compute_kernel_from_string, get_io_kernel_from_string, get_comm_kernel_from_string, get_copy_kernel_from_string]):
+        if kernel_name.lower() in kernal_names:
+            return f(kernel_name)
+    raise ValueError(f"Unknown kernel name {kernel_name}. Available kernels are: {compute_kernel_names + io_kernel_names + comm_kernel_names + copy_kernel_names}")
