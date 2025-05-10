@@ -17,11 +17,8 @@ class Simulation(Component):
             self.size = 1
             self.rank = 0
 
-    def init_from_json(self, json_file):
-        """Initialize the simulation from a JSON file."""
-        with open(json_file, 'r') as f:
-            data = json.load(f)
-        kernels = data.get('kernels', [])
+    def init_from_dict(self, config:dict):
+        kernels = config.get('kernels', [])
         for kernel in kernels:
             name = kernel.get('name')
             mini_app_kernel = kernel.get('mini_app_kernel', 'MatMulSimple2D')
@@ -31,6 +28,12 @@ class Simulation(Component):
             self.add_kernel(name, mini_app_kernel=mini_app_kernel, device=device, data_size=data_size, run_count=run_count)
             if "run_time" in kernel:
                 self.set_kernel_run_count_by_time(name, kernel["run_time"])
+    
+    def init_from_json(self, json_file):
+        """Initialize the simulation from a JSON file."""
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        self.init_from_dict(data)
 
     def add_kernel(self, name:str, mini_app_kernel:str="MatMulSimple2D", device:str="cpu", data_size:tuple=(32,32,32), run_count:int=1):
         """Add a kernel to the simulation."""
@@ -84,21 +87,24 @@ class Simulation(Component):
             raise ValueError(f"Kernel '{name}' not found in self.ktoi")
         idx = self.ktoi[name]
         k = self.kernels[idx]
+        timing_iter = 100
         # Measure single run time
         if k['data_size'] is not None:
             start = time.time()
-            k['func'](k['device'], k['data_size'])
+            for _ in range(timing_iter):
+                k['func'](k['device'], k['data_size'])
             end = time.time()
         else:
             start = time.time()
-            k['func'](k['device'])
+            for _ in range(timing_iter):
+                k['func'](k['device'])
             end = time.time()
         single_run_time = end - start
         if single_run_time <= 0:
             raise ValueError("Measured single_run_time must be positive")
         if self.comm is not None:
             single_run_time = self.comm.allreduce(single_run_time) / self.size
-        run_count = int(total_time // single_run_time)
+        run_count = int(total_time // (single_run_time/timing_iter))
         self.logger.info(f"Setting run_count for kernel '{name}' to {run_count} based on total_time {total_time} and single_run_time {single_run_time}")
         k['run_count'] = max(1, run_count)
     

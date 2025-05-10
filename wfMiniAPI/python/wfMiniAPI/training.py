@@ -222,19 +222,19 @@ class AI(Component):
                                         self.ddp)
         train(self.model, dataloader, self.criterion, self.optimizer, self.device, self.num_epochs, self.ddp)
         
-    def set_nlayers_train(self,total_time):
-        """
-        Determine the number of layers based on the total time.
-        """
-        simulated_time = 0
-        while simulated_time < total_time:
-            self.model.add_layer()
-            self.setup_training()
-            tic = time.perf_counter()
-            self.train()
-            toc = time.perf_counter()
-            simulated_time = toc - tic
-        return 
+    # def set_nlayers_train(self,total_time):
+    #     """
+    #     Determine the number of layers based on the total time.
+    #     """
+    #     simulated_time = 0
+    #     while simulated_time < total_time:
+    #         self.model.add_layer()
+    #         self.setup_training()
+    #         tic = time.perf_counter()
+    #         self.train()
+    #         toc = time.perf_counter()
+    #         simulated_time = toc - tic
+    #     return 
 
     def infer(self):
         """Perform inference on inputs."""
