@@ -131,16 +131,35 @@ class Component:
                 )
             """)
 
-            # Insert the key-filename mapping
-            try:
-                cursor.execute("INSERT INTO staging (key, filename) VALUES (?, ?)", (key, filename))
-                conn.commit()
-                self.logger.debug(f"Staged data for {key} at {filename} and recorded in database {db_path}")
-            except sqlite3.IntegrityError:
-                self.logger.error(f"Key {key} already exists in the staging database")
-                raise ValueError(f"Key {key} already exists")
-            finally:
-                conn.close()
+            # Insert the key-filename mapping with retry mechanism for locked DB
+            max_retries = 5
+            retry_delay = 0.5  # seconds
+            attempt = 0
+            
+            while attempt < max_retries:
+                try:
+                    cursor.execute("INSERT INTO staging (key, filename) VALUES (?, ?)", (key, filename))
+                    conn.commit()
+                    self.logger.debug(f"Staged data for {key} at {filename} and recorded in database {db_path}")
+                    break  # Success, exit the loop
+                except sqlite3.OperationalError as e:
+                    if "database is locked" in str(e) or "readonly database" in str(e):
+                        attempt += 1
+                        if attempt < max_retries:
+                            self.logger.warning(f"Database {db_path} is locked/readonly. Waiting {retry_delay}s before retry {attempt}/{max_retries}")
+                            time.sleep(retry_delay)
+                            retry_delay *= 1.5  # Exponential backoff
+                        else:
+                            self.logger.error(f"Failed to write to database after {max_retries} attempts: {e}")
+                            raise
+                    else:
+                        self.logger.error(f"Database error: {e}")
+                        raise
+                except sqlite3.IntegrityError:
+                    self.logger.error(f"Key {key} already exists in the staging database")
+                    raise ValueError(f"Key {key} already exists")
+                finally:
+                    conn.close()
         else:
             self.logger.error("Unsupported data transport type")
             raise ValueError("Unsupported data transport type")

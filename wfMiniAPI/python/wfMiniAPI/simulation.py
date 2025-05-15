@@ -65,7 +65,6 @@ class Simulation(Component):
 
     def run(self, nsteps:int=1):
         """Run all kernels in sequence for the specified total_time."""
-        self.logger.info(f"Starting simulation {self.name} for {nsteps} steps.")
         for _ in range(nsteps):
             for k in self.kernels:
                 for _ in range(k['run_count']):
@@ -75,7 +74,6 @@ class Simulation(Component):
                         k['func'](k['device'])
             if self.comm is not None:
                 self.comm.Barrier()
-        self.logger.info(f"Simulation {self.name} completed {nsteps} steps.")
     
     def set_kernel_run_count_by_time(self, name, total_time):
         """
@@ -105,6 +103,7 @@ class Simulation(Component):
         if self.comm is not None:
             single_run_time = self.comm.allreduce(single_run_time) / self.size
         run_count = int(total_time // (single_run_time/timing_iter))
+        assert run_count > 0, "runcount == 0 try reducing the data size"
         self.logger.info(f"Setting run_count for kernel '{name}' to {run_count} based on total_time {total_time} and single_run_time {single_run_time}")
         k['run_count'] = max(1, run_count)
     

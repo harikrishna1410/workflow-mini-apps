@@ -16,6 +16,7 @@ import socket
 import sys
 import os
 import datetime
+import math
 
 class SimpleFeedForwardNet(nn.Module):
     def __init__(self, 
@@ -34,6 +35,14 @@ class SimpleFeedForwardNet(nn.Module):
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.neurons_per_layer = neurons_per_layer
+        self.input_params = {
+                        "dropout":dropout,
+                        "use_batchnorm":use_batchnorm,
+                        "num_hidden_layers":num_hidden_layers,
+                        "input_dim":input_dim,
+                        "output_dim":output_dim,
+                        "neurons_per_layer":neurons_per_layer
+                     }
 
         self.layers = [nn.Linear(input_dim, neurons_per_layer)]
         for i in range(num_hidden_layers):
@@ -45,7 +54,10 @@ class SimpleFeedForwardNet(nn.Module):
                 self.layers.append(nn.Dropout(dropout))
         self.layers.append(nn.Linear(neurons_per_layer, output_dim))
         self.model = nn.Sequential(*self.layers)
-        
+    
+    def get_input_params(self):
+        return self.input_params
+    
     def forward(self, x):
         return self.model(x)
         
@@ -94,7 +106,7 @@ class AI(Component):
                 model_type="feedforward", 
                 dropout=0.1, 
                 use_batchnorm=True, 
-                num_hidden_layers=0, 
+                num_hidden_layers=1, 
                 loss_type="mse", 
                 lr=0.001, 
                 data_size=1000,
@@ -136,6 +148,7 @@ class AI(Component):
         sys.stdout.flush()
         self.criterion = None
         self.optimizer = None
+        self.dataloader = None
 
         if self.ddp:
             assert device == "cuda" or device == "xpu" or device == "cpu", "DDP is only supported on CUDA or XPU devices."
@@ -205,37 +218,86 @@ class AI(Component):
             
         self.criterion = create_loss_function(self.loss_type)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
-            
-    def train(self):
-        """Train the model using data specifications to build a dataloader."""
-        assert self.model is not None, "Model not built yet. Call build_model first."
-        if self.criterion is None or self.optimizer is None:
-            self.setup_training()
-
         input_dim = self.model.input_dim if not self.ddp else self.model.module.input_dim
         output_dim = self.model.output_dim if not self.ddp else self.model.module.output_dim
-        dataloader = setup_dataloader(  self.data_size, 
+        self.dataloader = setup_dataloader(  self.data_size, 
                                         (input_dim,),
                                         (output_dim,), 
                                         self.batch_size, 
                                         self.shuffle, 
                                         self.ddp)
-        train(self.model, dataloader, self.criterion, self.optimizer, self.device, self.num_epochs, self.ddp)
-        
-    # def set_nlayers_train(self,total_time):
-    #     """
-    #     Determine the number of layers based on the total time.
-    #     """
-    #     simulated_time = 0
-    #     while simulated_time < total_time:
-    #         self.model.add_layer()
-    #         self.setup_training()
-    #         tic = time.perf_counter()
-    #         self.train()
-    #         toc = time.perf_counter()
-    #         simulated_time = toc - tic
-    #     return 
+            
+    def train(self):
+        """Train the model using data specifications to build a dataloader."""
+        assert self.model is not None, "Model not built yet. Call build_model first."
+        self.logger.info("Entered training")
+        if self.criterion is None or self.optimizer is None:
+            self.setup_training()
+        self.logger.info("Starting training")
+        train(self.model, self.dataloader, self.criterion, self.optimizer, self.device, self.num_epochs, self.ddp)
+        self.logger.info("Done training")
 
+    def set_model_params_from_train_time(self,target_time:float):
+        nn_params = self.model.get_input_params()
+        tic = time.perf_counter()
+        self.train()
+        toc = time.perf_counter()
+        train_time = toc - tic
+        ##hoping to converge in 16 steps
+        dn = int(math.log2((abs(target_time - train_time)/train_time)*nn_params["neurons_per_layer"]/16))
+        dn = max(dn,2)
+        self.logger.info(f"Setting model parameter from training time.target_time:{target_time},train_time{train_time}")
+        if train_time > target_time:
+            while train_time > target_time:
+                nn_params = self.model.get_input_params()
+                nn_params["neurons_per_layer"] -= dn
+                assert nn_params["neurons_per_layer"] > 0, "neurons per layer < 0, try reducing other params"
+                self.model = self.build_model(**nn_params)
+                tic = time.perf_counter()
+                self.train()
+                toc = time.perf_counter()
+                train_time = toc - tic
+        else:
+            while train_time < target_time:
+                nn_params = self.model.get_input_params()
+                nn_params["neurons_per_layer"] += dn
+                self.model = self.build_model(**nn_params)
+                tic = time.perf_counter()
+                self.train()
+                toc = time.perf_counter()
+                train_time = toc - tic
+        return 
+
+    def set_model_params_from_infer_time(self,target_time:float):
+        nn_params = self.model.get_input_params()
+        tic = time.perf_counter()
+        self.infer()
+        toc = time.perf_counter()
+        infer_time = toc - tic
+        ##hoping to converge in 16 steps
+        dn = int(math.log2((abs(target_time - infer_time)/infer_time)*nn_params["neurons_per_layer"]/16))
+        dn = max(dn,2)
+        if infer_time > target_time:
+            while infer_time > target_time:
+                nn_params = self.model.get_input_params()
+                nn_params["neurons_per_layer"] -= dn
+                assert nn_params["neurons_per_layer"] > 0, "neurons per layer < 0"
+                self.model = self.build_model(**nn_params)
+                tic = time.perf_counter()
+                self.infer()
+                toc = time.perf_counter()
+                infer_time = toc - tic
+        else:
+            while infer_time < target_time:
+                nn_params = self.model.get_input_params()
+                nn_params["neurons_per_layer"] += dn
+                self.model = self.build_model(**nn_params)
+                tic = time.perf_counter()
+                self.infer()
+                toc = time.perf_counter()
+                infer_time = toc - tic
+        return 
+    
     def infer(self):
         """Perform inference on inputs."""
         if self.model is None:
