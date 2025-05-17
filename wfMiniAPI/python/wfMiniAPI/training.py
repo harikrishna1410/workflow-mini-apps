@@ -251,7 +251,7 @@ class AI(Component):
             while train_time > target_time:
                 nn_params = self.model.get_input_params()
                 nn_params["neurons_per_layer"] -= dn
-                assert nn_params["neurons_per_layer"] > 0, "neurons per layer < 0, try reducing other params"
+                assert nn_params["neurons_per_layer"] > 0, f"neurons per layer < 0, try reducing other params {nn_params['neurons_per_layer']}"
                 self.model = self.build_model(**nn_params)
                 tic = time.perf_counter()
                 self.train()

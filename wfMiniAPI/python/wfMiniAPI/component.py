@@ -18,9 +18,6 @@ class Component:
         
         if self.config["type"] == "node-local":
             self.config["location"] = "/tmp"
-            fname=os.path.join(self.config["location"],"staging.db")
-            if os.path.exists(fname):
-                os.remove(fname)
         
         if logging:
             # Setup logging

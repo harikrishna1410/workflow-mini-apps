@@ -8,5 +8,7 @@
     "sim_write_freq": 100,
     "infer_time": 0.02,
     "train_time": 0.07,
-    "ai_device":"xpu"
+    "ai_device":"xpu",
+    "staging_data_size":8000000,
+    "dt_type":"node-local"
    }

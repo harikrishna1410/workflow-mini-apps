@@ -17,7 +17,7 @@ Here a simulation is defined using sim_telemetry.json. This telemetry data has t
   Then waits for the AI to consume the data and put its inference result back to the simulation.
 """
 
-def main(write_freq=1,data_size=(32,32,32),dtype=np.float64,config={"type":"filesystem"}):
+def main(write_freq=1,data_size=32*32*32,dtype=np.float64,config={"type":"filesystem"}):
     # Initialize MPI
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
@@ -41,7 +41,7 @@ def main(write_freq=1,data_size=(32,32,32),dtype=np.float64,config={"type":"file
         if i % write_freq == 0:
             tic = time.time()
             if simulation.logger:
-                simulation.logger.info(f"Write the data: sim_data_{rank}_{i//write_freq}")
+                simulation.logger.debug(f"Write the data: sim_data_{rank}_{i//write_freq}")
             simulation.stage_write(f"sim_data_{rank}_{i//write_freq}", np.empty(data_size, dtype=dtype))
             toc = time.time()
             data_write_time = toc - tic
@@ -62,7 +62,7 @@ def main(write_freq=1,data_size=(32,32,32),dtype=np.float64,config={"type":"file
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--write_freq", type=int, default=1, help="Frequency of writing simulation data")
-    parser.add_argument("--data_size", type=int, nargs=3, default=(32,32,32), help="Size of the data to stage")
+    parser.add_argument("--data_size", type=int, default=32*32*32, help="Size of the data to stage")
     parser.add_argument("--dtype", type=str, default="float64", help="Data type of the simulation data")
     parser.add_argument("--location", type=str, required=True, help="Location for the simulation data")
     parser.add_argument("--type", type=str, required=True, help="Transport type for the simulation data")
@@ -75,4 +75,4 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Unsupported dtype: {args.dtype}")
     config = {"type": args.type, "location": args.location}
-    main(write_freq=args.write_freq, data_size=tuple(args.data_size), dtype=dtype, config=config)
+    main(write_freq=args.write_freq, data_size=args.data_size, dtype=dtype, config=config)
