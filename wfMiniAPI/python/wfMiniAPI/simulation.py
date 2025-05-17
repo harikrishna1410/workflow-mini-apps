@@ -2,10 +2,11 @@ import json
 from wfMiniAPI.component import Component
 import time
 from wfMiniAPI.kernel import get_kernel_from_string
+import os
 
 class Simulation(Component):
-    def __init__(self,name="SIM",comm=None,config:dict={"type":"filesystem"}):
-        super().__init__(name,config=config)
+    def __init__(self,name="SIM",comm=None,config:dict={"type":"filesystem"},logging=False):
+        super().__init__(name,config=config,logging=logging)
         self.name = name
         self.comm = comm
         self.kernels = []
@@ -13,9 +14,13 @@ class Simulation(Component):
         if self.comm is not None:
             self.size = self.comm.Get_size()
             self.rank = self.comm.Get_rank()
+            self.local_rank = os.environ.get("MPI_LOCALRANKID",0)
+            if self.logger:
+                self.logger.info(f"Setting the ")
         else:
             self.size = 1
             self.rank = 0
+            self.local_rank = 0
 
     def init_from_dict(self, config:dict):
         kernels = config.get('kernels', [])
@@ -104,7 +109,8 @@ class Simulation(Component):
             single_run_time = self.comm.allreduce(single_run_time) / self.size
         run_count = int(total_time // (single_run_time/timing_iter))
         assert run_count > 0, "runcount == 0 try reducing the data size"
-        self.logger.info(f"Setting run_count for kernel '{name}' to {run_count} based on total_time {total_time} and single_run_time {single_run_time}")
+        if self.logger:
+            self.logger.info(f"Setting run_count for kernel '{name}' to {run_count} based on total_time {total_time} and single_run_time {single_run_time/timing_iter}")
         k['run_count'] = max(1, run_count)
     
     # def set_kernel_data_size_by_time(self, name, total_time, min_data_size=8*8*8, max_data_size=64*64*64,steps=8*8*8):

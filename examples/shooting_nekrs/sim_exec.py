@@ -24,24 +24,38 @@ def main(write_freq=1,data_size=(32,32,32),dtype=np.float64,config={"type":"file
     size = comm.Get_size()
 
     # Create a simulation object
-    simulation = sim(name=f"sim_{rank}", comm=comm, config=config)
+    logging = rank==0
+    simulation = sim(name=f"sim_{rank}", comm=comm, config=config,logging=logging)
 
     # Initialize the simulation from a JSON file
     simulation.init_from_json("sim_telemetry.json")
     
     i=0
     while True:
+        tic = time.time()
         # Run the simulation step
         simulation.run(nsteps=1)
+        toc = time.time()
+        iter_time = toc - tic
         # Stage data for the AI to read
         if i % write_freq == 0:
-            simulation.logger.info(f"Write the data: sim_data_{rank}_{i//write_freq}")
+            tic = time.time()
+            if simulation.logger:
+                simulation.logger.info(f"Write the data: sim_data_{rank}_{i//write_freq}")
             simulation.stage_write(f"sim_data_{rank}_{i//write_freq}", np.empty(data_size, dtype=dtype))
+            toc = time.time()
+            data_write_time = toc - tic
+        else:
+            data_write_time = 0.0
         
+        if simulation.logger:
+            simulation.logger.info(f"tstep time: {iter_time}, dt time: {data_write_time}")
         ##check for data
         if simulation.poll_staged_data(f"ai_data_{rank}"):
             data = simulation.stage_read(f"ai_data_{rank}")
             if data=="kill_sim":
+                if simulation.logger:
+                    simulation.logger.info("Received kill message!")
                 break
         i+=1
 

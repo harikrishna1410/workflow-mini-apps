@@ -118,8 +118,9 @@ class AI(Component):
                 num_epochs=10,
                 device="cpu",
                 ddp=False, 
-                comm=None):
-        super().__init__(name,config=config)
+                comm=None,
+                logging=False):
+        super().__init__(name,config=config,logging=logging)
         self.name = name
         self.model_type = model_type
         self.loss_type = loss_type
@@ -176,6 +177,7 @@ class AI(Component):
             output_dim=output_dim,
             neurons_per_layer=neurons_per_layer
             )
+        self.setup_training()
             
     def build_model(self,             
                     dropout=0.1, 
@@ -230,12 +232,9 @@ class AI(Component):
     def train(self):
         """Train the model using data specifications to build a dataloader."""
         assert self.model is not None, "Model not built yet. Call build_model first."
-        self.logger.info("Entered training")
         if self.criterion is None or self.optimizer is None:
             self.setup_training()
-        self.logger.info("Starting training")
         train(self.model, self.dataloader, self.criterion, self.optimizer, self.device, self.num_epochs, self.ddp)
-        self.logger.info("Done training")
 
     def set_model_params_from_train_time(self,target_time:float):
         nn_params = self.model.get_input_params()
@@ -246,7 +245,8 @@ class AI(Component):
         ##hoping to converge in 16 steps
         dn = int(math.log2((abs(target_time - train_time)/train_time)*nn_params["neurons_per_layer"]/16))
         dn = max(dn,2)
-        self.logger.info(f"Setting model parameter from training time.target_time:{target_time},train_time{train_time}")
+        if self.logger:
+            self.logger.info(f"Setting model parameter from training time.target_time:{target_time},train_time{train_time}")
         if train_time > target_time:
             while train_time > target_time:
                 nn_params = self.model.get_input_params()

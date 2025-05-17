@@ -493,14 +493,21 @@ class MatMulSimple2D(ComputeKernel):
         xp = get_device_module(device)
         matrix_a = xp.empty(data_size, dtype=xp.float32)
         matrix_b = xp.empty(data_size, dtype=xp.float32)
-        return xp.matmul(matrix_a, matrix_b)
+        c = xp.matmul(matrix_a, matrix_b)
+        if kwargs.get("sync",True):
+            if device == "xpu":
+                c.sycl_queue.wait()
+        
 
 class MatMulGeneral(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), axis: int | tuple = 2, **kwargs):
         xp = get_device_module(device)
         matrix_a = xp.empty(data_size, dtype=xp.float32)
         matrix_b = xp.empty(data_size, dtype=xp.float32)
-        return xp.tensordot(matrix_a, matrix_b, axis)
+        c = xp.tensordot(matrix_a, matrix_b, axis)
+        if kwargs.get("sync",True):
+            if device == "xpu":
+                c.sycl_queue.wait()
 
 class FFT(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), type_in: str = "float", transform_dim: int = -1, **kwargs):
@@ -516,7 +523,10 @@ class FFT(ComputeKernel):
         else:
             raise TypeError("In fft call, type_in must be one of the following: [float, double, complexF, complexD]")
         
-        return xp.fft.fft(data_in, axis=transform_dim)
+        c = xp.fft.fft(data_in, axis=transform_dim)
+        if kwargs.get("sync",True):
+            if device == "xpu":
+                c.sycl_queue.wait()
 
 class AXPY(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
@@ -524,6 +534,9 @@ class AXPY(ComputeKernel):
         x = xp.empty(data_size, dtype=xp.float32)
         y = xp.empty(data_size, dtype=xp.float32)
         y += 1.01 * x
+        if kwargs.get("sync",True):
+            if device == "xpu":
+                y.sycl_queue.wait()
         return y
 
 class InplaceCompute(ComputeKernel):
@@ -541,20 +554,26 @@ class InplaceCompute(ComputeKernel):
                 raise ValueError("Operator must be a callable function.")
             else:
                 op_func = op
-
-        return op_func(x)
+        y = op_func(x)
+        if kwargs.get("sync",True):
+            if device == "xpu":
+                y.sycl_queue.wait()
+        return
 
 class GenerateRandomNumber(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
         xp = get_device_module(device)
-        return xp.random.rand(*data_size)
+        x = xp.random.rand(*data_size)
+        if kwargs.get("sync",True):
+            if device == "xpu":
+                x.sycl_queue.wait()
 
 class ScatterAdd(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
         xp = get_device_module(device)
-        y = xp.empty(xp.prod(data_size), dtype=xp.float32)
-        x = xp.empty(xp.prod(data_size), dtype=xp.float32)
-        idx = xp.random.randint(0, xp.prod(data_size), size=xp.prod(data_size), dtype=xp.int32)
+        y = xp.empty(np.prod(data_size), dtype=xp.float32)
+        x = xp.empty(np.prod(data_size), dtype=xp.float32)
+        idx = xp.random.randint(0, int(np.prod(data_size)), size=int(np.prod(data_size)), dtype=xp.int32)
         if device.lower() == "cpu":
             y += x[idx]
         elif device.lower() == "cuda":

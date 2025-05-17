@@ -12,7 +12,8 @@ This is example workflow from [1]
 """
 
 def main(np:int,
-         other_mpi_opts:str,
+         other_mpi_opts_sim:str,
+         other_mpi_opts_ai:str,
          nsteps_train:int,
          nsteps_infer:int,
          model_update_freq:int,
@@ -22,18 +23,22 @@ def main(np:int,
          infer_time:float,
          train_time:float,
          ai_device:str):
-  sim_cmd = f"mpirun -n {np} {other_mpi_opts} python sim_exec.py"+\
+  sim_cmd = f"mpirun -n {np} {other_mpi_opts_sim} python sim_exec.py"+\
             f" --write_freq {write_freq}"+\
             f" --location {dt_location} --type {dt_type}"
-  ai_cmd = f"mpirun -n {np} {other_mpi_opts}"+\
+  
+  ai_cmd = f"mpirun -n {np} {other_mpi_opts_ai}"+\
             f" python ai_exec.py --nsteps_train {nsteps_train}"+\
             f" --nsteps_infer {nsteps_infer}"+\
             f" --update_frequency {model_update_freq}"+\
             f" --location {dt_location} --type {dt_type}"+\
             f" --infer_time {infer_time} --train_time {train_time} --device {ai_device}"
 
-  sim_process = subprocess.Popen(sim_cmd, cwd=os.path.dirname(__file__), shell=True)
-  ai_process = subprocess.Popen(ai_cmd, cwd=os.path.dirname(__file__), shell=True)
+  env_sim = os.environ.copy()
+  env_ai = os.environ.copy()
+  env_ai["START_GPU"]="3"
+  sim_process = subprocess.Popen(sim_cmd, cwd=os.path.dirname(__file__), shell=True, env=env_sim)
+  ai_process = subprocess.Popen(ai_cmd, cwd=os.path.dirname(__file__), shell=True, env=env_ai)
 
   while ai_process.poll() is None:
     time.sleep(1)
@@ -57,7 +62,8 @@ if __name__ == "__main__":
   # Default configuration
   config = {
     "np": 4,
-    "other_mpi_opts": "",
+    "other_mpi_opts_sim": "",
+    "other_mpi_opts_ai": "",
     "nsteps_train": 100,
     "nsteps_infer": 10,
     "model_update_freq": 10,
@@ -80,9 +86,10 @@ if __name__ == "__main__":
     print(f"Error parsing config file {args.config}. Using default configuration.")
   
   if config["dt_type"] == "filesystem":
-    if os.path.exists(config["dt_location"]):
-      shutil.rmtree(config["dt_location"])
-    os.makedirs(config["dt_location"], exist_ok=True)
+    if r"/tmp" not in config["dt_location"]:
+      if os.path.exists(config["dt_location"]):
+        shutil.rmtree(config["dt_location"])
+      os.makedirs(config["dt_location"], exist_ok=True)
   
   logs = os.path.join(os.path.dirname(__file__),"logs")
   if os.path.exists(logs):
@@ -90,7 +97,8 @@ if __name__ == "__main__":
   
   
   main(np=config["np"], 
-       other_mpi_opts=config["other_mpi_opts"], 
+       other_mpi_opts_sim=config["other_mpi_opts_sim"],
+       other_mpi_opts_ai=config["other_mpi_opts_ai"], 
        nsteps_train=config["nsteps_train"], 
        nsteps_infer=config["nsteps_infer"],
        model_update_freq=config["model_update_freq"],
