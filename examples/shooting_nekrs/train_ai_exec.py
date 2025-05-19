@@ -15,13 +15,11 @@ def main(device:str,nsteps_train:int,update_frequency:int,config:dict):
     rank = comm.Get_rank()
     size = comm.Get_size()
     ###NOTE: this not ddp
-    train_ai = AI(f"train_AI_{rank}", config=config, neurons_per_layer=8, num_epochs=1, input_dim=8, output_dim=8, device=device,logging=(rank==0))
-    ###set times
-    train_ai.set_model_params_from_train_time(config["train_time"])
+    train_ai = AI(f"train_AI_{rank}", config=config, num_layers=32, device=device,logging=(rank==0))
     comm.Barrier()
     for i in range(nsteps_train):
         tic = time.time()
-        train_ai.train()
+        train_ai.train(run_time=config["train_time"])
         train_time = time.time() - tic
         ##comsume the simulation data
         ## wait for the data to be staged

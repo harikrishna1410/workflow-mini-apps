@@ -16,15 +16,13 @@ def main(device:str,nsteps_infer:int,config:dict,data_size:int):
     rank = comm.Get_rank()
     size = comm.Get_size()
     ###NOTE: this not ddp
-    infer_ai = AI(f"infer_AI_{rank}", config=config, neurons_per_layer=8,num_epochs=1, input_dim=8, output_dim=8, device=device,logging=(rank==0))
-    ###set times
-    infer_ai.set_model_params_from_infer_time(config["infer_time"])
+    infer_ai = AI(f"infer_AI_{rank}", config=config, num_layers=32, device=device,logging=(rank==0))
     ##infer
     data = np.empty(data_size)
     for i in range(nsteps_infer):
         # Measure inference time
         tic_infer = time.time()
-        infer_ai.infer()
+        infer_ai.infer(run_time=config["infer_time"])
         infer_time = time.time() - tic_infer
             
         # Measure write time

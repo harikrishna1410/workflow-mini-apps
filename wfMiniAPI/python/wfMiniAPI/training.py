@@ -18,6 +18,7 @@ import os
 import datetime
 import math
 import gc
+import logging as logging_
 
 class SimpleFeedForwardNet(nn.Module):
     def __init__(self, 
@@ -120,8 +121,9 @@ class AI(Component):
                 device="cpu",
                 ddp=False, 
                 comm=None,
-                logging=False):
-        super().__init__(name,config=config,logging=logging)
+                logging=False,
+                log_level=logging_.INFO):
+        super().__init__(name,config=config,logging=logging,log_level=log_level)
         self.name = name
         self.model_type = model_type
         self.loss_type = loss_type
@@ -234,108 +236,151 @@ class AI(Component):
                                         self.shuffle, 
                                         self.ddp)
             
-    def train(self):
+    def train(self,run_time:float=None,run_count:int=None)->float:
         """Train the model using data specifications to build a dataloader."""
+        assert run_time is not None or run_count is not None
         assert self.model is not None, "Model not built yet. Call build_model first."
+        tic = time.time()
+        elapsed_time = time.time() - tic
         if self.criterion is None or self.optimizer is None:
             self.setup_training()
-        train(self.model, self.dataloader, self.criterion, self.optimizer, self.device, self.num_epochs, self.ddp)
-        if self.device == 'cuda':
-            torch.cuda.synchronize()
-        elif self.device == 'xpu':
-            torch.xpu.synchronize()
-
-    def set_model_params_from_train_time(self,target_time:float):
-        nn_params = self.model.get_input_params()
-        ##do some warmup\
-        for i in range(10):
-            self.train()
-        tic = time.time()
-        for i in range(100):
-            self.train()
-        toc = time.time()
-        train_time = (toc - tic)/100.0
-        dn = int(((abs(train_time - target_time)/train_time)*nn_params["neurons_per_layer"])//10)
-        dn = max(dn,256)
-        if self.logger:
-            self.logger.info(f"Setting model parameter from training time.target_time:{target_time},train_time{train_time}")
-        if train_time > target_time:
-            while train_time > target_time and nn_params["neurons_per_layer"] > 0:
-                self.model = self.build_model(**nn_params)
-                tic = time.time()
-                self.train()
-                toc = time.time()
-                train_time = (toc - tic)
-                if self.logger:
-                    self.logger.info(f"Current neurons per layer {nn_params['neurons_per_layer']} {train_time} {target_time} {dn}")
-                nn_params["neurons_per_layer"] -= dn
+        if run_time is not None:
+            rc = 0
+            while elapsed_time < run_time:
+                train(self.model, self.dataloader, self.criterion, self.optimizer, self.device, self.num_epochs, self.ddp)
+                if self.device == 'cuda':
+                    torch.cuda.synchronize()
+                elif self.device == 'xpu':
+                    torch.xpu.synchronize()
+                elapsed_time = time.time() - tic
+                rc += 1
+            if self.logger:
+                self.logger.debug(f"Elapsed time {elapsed_time} target time {run_time} run count {rc}
         else:
-            while train_time < target_time:
-                self.model = self.build_model(**nn_params)
-                tic = time.time()
-                self.train()
-                toc = time.time()
-                train_time = (toc - tic)
-                if self.logger:
-                    self.logger.info(f"number of neuorns per layer {nn_params['neurons_per_layer']} {train_time} {target_time} {dn}")
-                nn_params["neurons_per_layer"] += dn
-        if self.logger:
-            self.logger.info("Done tuning training parameters!")
-        return 
+            for _ in range(run_count):
+                train(self.model, self.dataloader, self.criterion, self.optimizer, self.device, self.num_epochs, self.ddp)
+                if self.device == 'cuda':   
+                    torch.cuda.synchronize()
+                elif self.device == 'xpu':
+                    torch.xpu.synchronize()
+            elapsed_time = time.time() - tic
+            if self.logger:
+                self.logger.debug(f"Elapsed time {elapsed_time} run count {run_count}
+        return elapsed_time
 
-    def set_model_params_from_infer_time(self,target_time:float):
-        nn_params = self.model.get_input_params()
-        ##do some warmup
-        for i in range(10):
-            self.infer()
-        tic = time.time()
-        for i in range(100):
-            self.infer()
-        toc = time.time()
-        infer_time = (toc - tic)/100.0
-        dn = int(((abs(infer_time - target_time)/infer_time)*nn_params["neurons_per_layer"])//10)
-        dn = max(dn,256)
-        if infer_time > target_time:
-            while infer_time > target_time and nn_params["neurons_per_layer"] > 0:
-                self.model = self.build_model(**nn_params)
-                tic = time.time()
-                self.infer()
-                toc = time.time()
-                infer_time = (toc - tic)
-                if self.logger:
-                    self.logger.info(f"number of neuorns per layer {nn_params['neurons_per_layer']} {infer_time} {target_time} {dn}")
-                nn_params["neurons_per_layer"] -= dn
-
-        else:
-            while infer_time < target_time:
-                self.model = self.build_model(**nn_params)
-                tic = time.time()
-                self.infer()
-                toc = time.time()
-                infer_time = (toc - tic)
-                if self.logger:
-                    self.logger.info(f"number of neuorns per layer {nn_params['neurons_per_layer']} {infer_time} {target_time}")
-                nn_params["neurons_per_layer"] += dn
-
-
-        if self.logger:
-            self.logger.info("Done tuning training parameters!")
-        return 
-    
-    def infer(self):
+    def infer(self,run_time:float=None,run_count:int=None)->float:
         """Perform inference on inputs."""
+        assert run_time is not None or run_count is not None
         if self.model is None:
             raise ValueError("Model not built yet. Call build_model first.")
+        tic = time.time()
+        elapsed_time = time.time() - tic
         input_dim = self.model.input_dim if not self.ddp else self.model.module.input_dim
         inputs = torch.randn((self.batch_size, input_dim), dtype=torch.float32)
+        inputs = inputs.to(self.device)
         self.model.eval()
-        with torch.no_grad():
-            inputs = inputs.to(self.device)
-            outputs = self.model(inputs)
-        
-        if self.device == 'cuda':
-            torch.cuda.synchronize()
-        elif self.device == 'xpu':
-            torch.xpu.synchronize()
-
+        if run_time is not None:
+            with torch.no_grad():
+                rc = 0
+                while elapsed_time < run_time
+                    outputs = self.model(inputs)
+                    if self.device == 'cuda':
+                        torch.cuda.synchronize()
+                    elif self.device == 'xpu':
+                        torch.xpu.synchronize()
+                    elapsed_time = time.time() - tic
+                    rc += 1
+                if self.logger:
+                    self.logger.debug(f"Elapsed time {elapsed_time} target time {run_time} run count {rc}")
+        else:
+            with torch.no_grad():
+                for _ in range(run_count):
+                    outputs = self.model(inputs)
+                    if self.device == 'cuda':
+                        torch.cuda.synchronize()
+                    elif self.device == 'xpu':
+                        torch.xpu.synchronize()
+                elapsed_time = time.time() - tic
+                if self.logger:
+                    self.logger.debug(f"Elapsed time {elapsed_time} run count {run_count}
         return
+
+
+
+# def set_model_params_from_train_time(self,target_time:float):
+    #     nn_params = self.model.get_input_params()
+    #     ##do some warmup\
+    #     for i in range(10):
+    #         self.train()
+    #     tic = time.time()
+    #     for i in range(100):
+    #         self.train()
+    #     toc = time.time()
+    #     train_time = (toc - tic)/100.0
+    #     dn = int(((abs(train_time - target_time)/train_time)*nn_params["neurons_per_layer"])//10)
+    #     dn = max(dn,256)
+    #     if self.logger:
+    #         self.logger.info(f"Setting model parameter from training time.target_time:{target_time},train_time{train_time}")
+    #     if train_time > target_time:
+    #         while train_time > target_time and nn_params["neurons_per_layer"] > 0:
+    #             self.model = self.build_model(**nn_params)
+    #             tic = time.time()
+    #             self.train()
+    #             toc = time.time()
+    #             train_time = (toc - tic)
+    #             if self.logger:
+    #                 self.logger.info(f"Current neurons per layer {nn_params['neurons_per_layer']} {train_time} {target_time} {dn}")
+    #             nn_params["neurons_per_layer"] -= dn
+    #     else:
+    #         while train_time < target_time:
+    #             self.model = self.build_model(**nn_params)
+    #             tic = time.time()
+    #             self.train()
+    #             toc = time.time()
+    #             train_time = (toc - tic)
+    #             if self.logger:
+    #                 self.logger.info(f"number of neuorns per layer {nn_params['neurons_per_layer']} {train_time} {target_time} {dn}")
+    #             nn_params["neurons_per_layer"] += dn
+    #     if self.logger:
+    #         self.logger.info("Done tuning training parameters!")
+    #     return 
+
+    # def set_model_params_from_infer_time(self,target_time:float):
+    #     nn_params = self.model.get_input_params()
+    #     ##do some warmup
+    #     for i in range(10):
+    #         self.infer()
+    #     tic = time.time()
+    #     for i in range(100):
+    #         self.infer()
+    #     toc = time.time()
+    #     infer_time = (toc - tic)/100.0
+    #     dn = int(((abs(infer_time - target_time)/infer_time)*nn_params["neurons_per_layer"])//10)
+    #     dn = max(dn,256)
+    #     if infer_time > target_time:
+    #         while infer_time > target_time and nn_params["neurons_per_layer"] > 0:
+    #             self.model = self.build_model(**nn_params)
+    #             tic = time.time()
+    #             self.infer()
+    #             toc = time.time()
+    #             infer_time = (toc - tic)
+    #             if self.logger:
+    #                 self.logger.info(f"number of neuorns per layer {nn_params['neurons_per_layer']} {infer_time} {target_time} {dn}")
+    #             nn_params["neurons_per_layer"] -= dn
+
+    #     else:
+    #         while infer_time < target_time:
+    #             self.model = self.build_model(**nn_params)
+    #             tic = time.time()
+    #             self.infer()
+    #             toc = time.time()
+    #             infer_time = (toc - tic)
+    #             if self.logger:
+    #                 self.logger.info(f"number of neuorns per layer {nn_params['neurons_per_layer']} {infer_time} {target_time}")
+    #             nn_params["neurons_per_layer"] += dn
+
+
+    #     if self.logger:
+    #         self.logger.info("Done tuning training parameters!")
+    #     return 
+    
