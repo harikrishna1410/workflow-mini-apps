@@ -87,35 +87,44 @@ class Simulation(Component):
         else:
             raise ValueError(f"Unknow kernel {name}")
 
-    def run(self, nsteps:int=1) -> float:
+    ##Sync flags indicates if there should be a sync at the end of the tstep
+    ##when using mpi, if sync is True, then actual runtime will include the MPI sync time. 
+    ##So, actual runtime might not exactly same as the target runtime. When thought the while loop checks this
+    def run(self, nsteps:int=1,sync:bool=False) -> float:
         """Run 1 iteration of the simulation"""
         total_dt = 0.0
         for k in self.kernels:
             if k["run_time"] is not None:
                 kernel_dt = 0.0
+                overhead_dt = 0.0
+                tic = time.time()
                 if isinstance(k['func'],ComputeKernel):
-                    while kernel_dt < k["run_time"]:
+                    rc = 0
+                    while overhead_dt < k["run_time"]:
                         host_dt,device_dt = k['func'](k['device'], k['data_size'])
-                        kernel_dt += host_dt
+                        kernel_dt += device_dt
+                        overhead_dt = time.time() - tic
+                        rc += 1
                 else:
                     raise ValueError("Sorry, unsupported kernel type :-(")
-                
                 if self.logger:
-                    self.logger.debug(f"Actual runtime {kernel_dt} target runtime {k['run_time']}")
+                    self.logger.debug(f"Kernel runtime {kernel_dt}, target runtime {k['run_time']}, runtime with overheads {overhead_dt} run count {rc}")
             elif k["run_count"] is not None:
                 kernel_dt = 0.0
+                tic = time.time()
                 if isinstance(k['func'],ComputeKernel):
                     for _ in range(k["run_count"]):
                         host_dt,device_dt = k['func'](k['device'], k['data_size'])
                         kernel_dt += host_dt
+                    overhead_dt = time.time() - tic
                 else:
                     raise ValueError("Sorry, unsupported kernel type :-(")
                 if self.logger:
-                    self.logger.debug(f"Kernel run time {kernel_dt} for {k['run_count']} iterations")
+                    self.logger.debug(f"Kernel run time {kernel_dt} and runtime with overheads {overhead_dt} for {k['run_count']} iterations")
             else:
                 raise ValueError(f"kernel {k['name']} doesn't have neither run_count not run_time ")
-            total_dt += kernel_dt
-        if self.comm is not None:
+            total_dt += overhead_dt
+        if self.comm is not None and sync:
             ##no all reduce to avoid unecessary communications 
             self.comm.Barrier()
         return total_dt

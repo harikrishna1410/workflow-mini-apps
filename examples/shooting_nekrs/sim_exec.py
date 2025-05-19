@@ -2,6 +2,7 @@ from mpi4py import MPI
 from wfMiniAPI.simulation import Simulation as sim
 import argparse
 import numpy as np
+import logging as logging_
 import time
 
 """
@@ -31,12 +32,11 @@ def main(write_freq=1,data_size=32*32*32,dtype=np.float64,config={"type":"filesy
     simulation.init_from_json("sim_telemetry.json")
     comm.Barrier()
     i=0
-    while True:
+    while i < 1000:
         tic = time.time()
         # Run the simulation step
-        simulation.run(nsteps=1)
-        toc = time.time()
-        iter_time = toc - tic
+        iter_dt_out = simulation.run(nsteps=1)
+        iter_time = time.time() - tic
         # Stage data for the AI to read
         if i % write_freq == 0:
             tic = time.time()
@@ -49,7 +49,7 @@ def main(write_freq=1,data_size=32*32*32,dtype=np.float64,config={"type":"filesy
             data_write_time = 0.0
         
         if simulation.logger:
-            simulation.logger.info(f"tstep time: {iter_time}, dt time: {data_write_time}")
+            simulation.logger.info(f"tstep time: {iter_time}, returned tstep time {iter_dt_out}, dt time: {data_write_time}")
         ##check for data
         if simulation.poll_staged_data(f"ai_data_{rank}"):
             data = simulation.stage_read(f"ai_data_{rank}")

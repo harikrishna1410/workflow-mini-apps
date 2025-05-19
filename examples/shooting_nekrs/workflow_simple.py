@@ -40,39 +40,42 @@ def main(np:int,
   env_sim["ZE_FLAT_DEVICE_HIERARCHY"]="COMPOSITE"
   env_ai["START_GPU"]="3"
   sim_process = subprocess.Popen(sim_cmd, cwd=os.path.dirname(__file__), shell=True, env=env_sim)
-  time.sleep(1) ##wait until the sim starts
-  train_ai_process = subprocess.Popen(train_ai_cmd, cwd=os.path.dirname(__file__), shell=True, env=env_ai)
-
-  while train_ai_process.poll() is None:
-    if sim_process.poll() is not None:
-      print("Error: simulation failed!!")
-      train_ai_process.kill()
-      break
+  while sim_process.poll() is None:
     time.sleep(1)
 
-  returncode = train_ai_process.poll()
-  if sim_process.poll() is None:
-    sim_process.kill()
-    if returncode == 0:
-      print("Training successful")
-    else:
-      print("Training failed")
+  # time.sleep(1) ##wait until the sim starts
+  # train_ai_process = subprocess.Popen(train_ai_cmd, cwd=os.path.dirname(__file__), shell=True, env=env_ai)
 
-  infer_ai_cmd = f"mpirun -n {np} {other_mpi_opts_ai}"+\
-            f" python infer_ai_exec.py "+\
-            f" --nsteps_infer {nsteps_infer}"+\
-            f" --location {dt_location} --type {dt_type}"+\
-            f" --infer_time {infer_time} --device {ai_device} --data_size {staging_data_size}"
-  infer_ai_process = subprocess.Popen(infer_ai_cmd, cwd=os.path.dirname(__file__), shell=True, env=env_ai)
-  while infer_ai_process.poll() is None:
-    time.sleep(1)
+  # while train_ai_process.poll() is None:
+  #   if sim_process.poll() is not None:
+  #     print("Error: simulation failed!!")
+  #     train_ai_process.kill()
+  #     break
+  #   time.sleep(1)
+
+  # returncode = train_ai_process.poll()
+  # if sim_process.poll() is None:
+  #   sim_process.kill()
+  #   if returncode == 0:
+  #     print("Training successful")
+  #   else:
+  #     print("Training failed")
+
+  # infer_ai_cmd = f"mpirun -n {np} {other_mpi_opts_ai}"+\
+  #           f" python infer_ai_exec.py "+\
+  #           f" --nsteps_infer {nsteps_infer}"+\
+  #           f" --location {dt_location} --type {dt_type}"+\
+  #           f" --infer_time {infer_time} --device {ai_device} --data_size {staging_data_size}"
+  # infer_ai_process = subprocess.Popen(infer_ai_cmd, cwd=os.path.dirname(__file__), shell=True, env=env_ai)
+  # while infer_ai_process.poll() is None:
+  #   time.sleep(1)
   
-  returncode = infer_ai_process.poll()
-  if returncode != 0:
-    print("Inference failed")
-  else:
-    print("Inference successful")
-  return
+  # returncode = infer_ai_process.poll()
+  # if returncode != 0:
+  #   print("Inference failed")
+  # else:
+  #   print("Inference successful")
+  # return
 
 
 if __name__ == "__main__":
