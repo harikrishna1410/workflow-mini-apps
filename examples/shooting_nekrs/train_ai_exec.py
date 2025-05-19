@@ -18,6 +18,7 @@ def main(device:str,nsteps_train:int,update_frequency:int,config:dict):
     train_ai = AI(f"train_AI_{rank}", config=config, neurons_per_layer=8, num_epochs=1, input_dim=8, output_dim=8, device=device,logging=(rank==0))
     ###set times
     train_ai.set_model_params_from_train_time(config["train_time"])
+    comm.Barrier()
     for i in range(nsteps_train):
         tic = time.time()
         train_ai.train()

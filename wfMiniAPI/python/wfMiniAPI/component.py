@@ -6,7 +6,7 @@ import sqlite3
 import shutil
 
 class Component:
-    def __init__(self, name, config:dict={"type":"filesystem"},logging=False):
+    def __init__(self, name, config:dict={"type":"filesystem"},logging=False,log_level=logging_.INFO):
         self.name = name
         self.config = config
         self.connections = []
@@ -22,7 +22,7 @@ class Component:
         if logging:
             # Setup logging
             self.logger = logging_.getLogger(name)
-            self.logger.setLevel(logging_.INFO)
+            self.logger.setLevel(log_level)
             # Create logs directory if it doesn't exist
             log_dir = os.path.join(os.getcwd(), "logs")
             os.makedirs(log_dir, exist_ok=True)

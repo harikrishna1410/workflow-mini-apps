@@ -29,7 +29,7 @@ def main(write_freq=1,data_size=32*32*32,dtype=np.float64,config={"type":"filesy
 
     # Initialize the simulation from a JSON file
     simulation.init_from_json("sim_telemetry.json")
-    
+    comm.Barrier()
     i=0
     while True:
         tic = time.time()

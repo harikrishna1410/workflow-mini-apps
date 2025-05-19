@@ -14,6 +14,9 @@ except ImportError:
 
 try:
     import dpnp as dnp
+    import dpctl
+    devices = dpctl.get_devices()
+    default_queues = [dpctl.SyclQueue(d,property="enable_profiling") for d in devices]
     DPNP_AVAILABLE = True
 except ImportError:
     DPNP_AVAILABLE = False
@@ -478,7 +481,7 @@ def dataCopyD2H(data_size: tuple = (32, 32, 32)):
 class ComputeKernel(ABC):
     """ This ia base class for all compute kernels."""
     @abstractmethod
-    def __call__(self, device:str, data_size:tuple=(32,32,32),**kwargs) -> Any:
+    def __call__(self, device:str, data_size:tuple=(32,32,32),**kwargs) -> tuple:
         """
         This method should be implemented by subclasses to define the kernel's behavior.
         :param device: The device to use for computation (e.g., 'cpu', 'cuda', 'xpu').
@@ -488,88 +491,171 @@ class ComputeKernel(ABC):
         """
         pass
 
+    def sync(self,device:str):
+        if device=="xpu":
+            for q in default_queues:
+                q.wait()
+        else:
+            pass
+
 class MatMulSimple2D(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
         xp = get_device_module(device)
-        matrix_a = xp.empty(data_size, dtype=xp.float32)
-        matrix_b = xp.empty(data_size, dtype=xp.float32)
-        c = xp.matmul(matrix_a, matrix_b)
-        if kwargs.get("sync",True):
-            if device == "xpu":
-                c.sycl_queue.wait()
+        if device == "xpu":
+            default_timers = [dpctl.SyclTimer() for _ in range(len(default_queues))]
+            for qid,q in enumerate(default_queues):
+                with default_timers[qid](queue=q):
+                    matrix_a = xp.empty(data_size, dtype=xp.float32,sycl_queue=q)
+                    matrix_b = xp.empty(data_size, dtype=xp.float32,sycl_queue=q)
+                    c = xp.matmul(matrix_a, matrix_b)
+                    ###this is included to make sure that host_dt also includes the device_dt. See the link below
+                    q.wait()
+            #timer.dt syncs the tasks by default
+            #https://intelpython.github.io/dpctl/latest/api_reference/dpctl/generated/dpctl.SyclTimer.html#dpctl.SyclTimer
+            ##Note that host timer only gives the submission time and not the execution time
+            ##take the mean of all the default queues
+            return tuple(np.mean([(timer.dt.host_dt,timer.dt.device_dt) for timer in default_timers],axis=0))
+        else:
+            tic = time.time()
+            matrix_a = xp.empty(data_size, dtype=xp.float32)
+            matrix_b = xp.empty(data_size, dtype=xp.float32)
+            c = xp.matmul(matrix_a, matrix_b)
+            return tuple([time.time()-tic,time.time()-tic])
         
 
 class MatMulGeneral(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), axis: int | tuple = 2, **kwargs):
         xp = get_device_module(device)
-        matrix_a = xp.empty(data_size, dtype=xp.float32)
-        matrix_b = xp.empty(data_size, dtype=xp.float32)
-        c = xp.tensordot(matrix_a, matrix_b, axis)
-        if kwargs.get("sync",True):
-            if device == "xpu":
-                c.sycl_queue.wait()
+        if device == "xpu":
+            default_timers = [dpctl.SyclTimer() for _ in range(len(default_queues))]
+            for qid, q in enumerate(default_queues):
+                with default_timers[qid](queue=q):
+                    matrix_a = xp.empty(data_size, dtype=xp.float32, sycl_queue=q)
+                    matrix_b = xp.empty(data_size, dtype=xp.float32, sycl_queue=q)
+                    c = xp.tensordot(matrix_a, matrix_b, axis)
+                    q.wait()
+            # Return mean of all default queues
+            return tuple(np.mean([(timer.dt.host_dt,timer.dt.device_dt) for timer in default_timers], axis=0))
+        else:
+            tic = time.time()
+            matrix_a = xp.empty(data_size, dtype=xp.float32)
+            matrix_b = xp.empty(data_size, dtype=xp.float32)
+            c = xp.tensordot(matrix_a, matrix_b, axis)
+            return tuple([time.time()-tic, time.time()-tic])
 
 class FFT(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), type_in: str = "float", transform_dim: int = -1, **kwargs):
         xp = get_device_module(device)
-        if type_in == "float":
-            data_in = xp.empty(data_size, dtype=xp.float32)
-        elif type_in == "double":
-            data_in = xp.empty(data_size, dtype=xp.float64)
-        elif type_in == "complexF":
-            data_in = xp.empty(data_size, dtype=xp.complex64)
-        elif type_in == "complexD":
-            data_in = xp.empty(data_size, dtype=xp.complex128)
+        if device == "xpu":
+            default_timers = [dpctl.SyclTimer() for _ in range(len(default_queues))]
+            for qid, q in enumerate(default_queues):
+                with default_timers[qid](queue=q):
+                    if type_in == "float":
+                        data_in = xp.empty(data_size, dtype=xp.float32, sycl_queue=q)
+                    elif type_in == "double":
+                        data_in = xp.empty(data_size, dtype=xp.float64, sycl_queue=q)
+                    elif type_in == "complexF":
+                        data_in = xp.empty(data_size, dtype=xp.complex64, sycl_queue=q)
+                    elif type_in == "complexD":
+                        data_in = xp.empty(data_size, dtype=xp.complex128, sycl_queue=q)
+                    else:
+                        raise TypeError("In fft call, type_in must be one of the following: [float, double, complexF, complexD]")
+                    
+                    c = xp.fft.fft(data_in, axis=transform_dim)
+                    q.wait()
+            return tuple(np.mean([(timer.dt.host_dt,timer.dt.device_dt) for timer in default_timers], axis=0))
         else:
-            raise TypeError("In fft call, type_in must be one of the following: [float, double, complexF, complexD]")
-        
-        c = xp.fft.fft(data_in, axis=transform_dim)
-        if kwargs.get("sync",True):
-            if device == "xpu":
-                c.sycl_queue.wait()
+            tic = time.time()
+            if type_in == "float":
+                data_in = xp.empty(data_size, dtype=xp.float32)
+            elif type_in == "double":
+                data_in = xp.empty(data_size, dtype=xp.float64)
+            elif type_in == "complexF":
+                data_in = xp.empty(data_size, dtype=xp.complex64)
+            elif type_in == "complexD":
+                data_in = xp.empty(data_size, dtype=xp.complex128)
+            else:
+                raise TypeError("In fft call, type_in must be one of the following: [float, double, complexF, complexD]")
+            
+            c = xp.fft.fft(data_in, axis=transform_dim)
+            return tuple([time.time()-tic, time.time()-tic])
 
 class AXPY(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
         xp = get_device_module(device)
-        x = xp.empty(data_size, dtype=xp.float32)
-        y = xp.empty(data_size, dtype=xp.float32)
-        y += 1.01 * x
-        if kwargs.get("sync",True):
-            if device == "xpu":
-                y.sycl_queue.wait()
-        return y
+        if device == "xpu":
+            default_timers = [dpctl.SyclTimer() for _ in range(len(default_queues))]
+            for qid, q in enumerate(default_queues):
+                with default_timers[qid](queue=q):
+                    x = xp.empty(data_size, dtype=xp.float32, sycl_queue=q)
+                    y = xp.empty(data_size, dtype=xp.float32, sycl_queue=q)
+                    y += 1.01 * x
+                    q.wait()
+            return tuple(np.mean([(timer.dt.host_dt,timer.dt.device_dt) for timer in default_timers], axis=0))
+        else:
+            tic = time.time()
+            x = xp.empty(data_size, dtype=xp.float32)
+            y = xp.empty(data_size, dtype=xp.float32)
+            y += 1.01 * x
+            return tuple([time.time()-tic, time.time()-tic])
 
 class InplaceCompute(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), op="exp", **kwargs):
         xp = get_device_module(device)
-        x = xp.empty(data_size, dtype=xp.float32)
-        # op can be either a string identifier or a Python callable
-        if isinstance(op, str):
-            if op == "exp":
-                op_func = xp.exp
-            else:
-                raise ValueError(f"Unknown operator {op}.")
+        if device == "xpu":
+            default_timers = [dpctl.SyclTimer() for _ in range(len(default_queues))]
+            for qid, q in enumerate(default_queues):
+                with default_timers[qid](queue=q):
+                    x = xp.empty(data_size, dtype=xp.float32, sycl_queue=q)
+                    # op can be either a string identifier or a Python callable
+                    if isinstance(op, str):
+                        if op == "exp":
+                            op_func = xp.exp
+                        else:
+                            raise ValueError(f"Unknown operator {op}.")
+                    else:
+                        if not callable(op):
+                            raise ValueError("Operator must be a callable function.")
+                        else:
+                            op_func = op
+                    y = op_func(x)
+                    q.wait()
+            return tuple(np.mean([(timer.dt.host_dt,timer.dt.device_dt) for timer in default_timers], axis=0))
         else:
-            if not callable(op):
-                raise ValueError("Operator must be a callable function.")
+            tic = time.time()
+            x = xp.empty(data_size, dtype=xp.float32)
+            # op can be either a string identifier or a Python callable
+            if isinstance(op, str):
+                if op == "exp":
+                    op_func = xp.exp
+                else:
+                    raise ValueError(f"Unknown operator {op}.")
             else:
-                op_func = op
-        y = op_func(x)
-        if kwargs.get("sync",True):
-            if device == "xpu":
-                y.sycl_queue.wait()
-        return
+                if not callable(op):
+                    raise ValueError("Operator must be a callable function.")
+                else:
+                    op_func = op
+            y = op_func(x)
+            return tuple([time.time()-tic, time.time()-tic])
 
 class GenerateRandomNumber(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
         xp = get_device_module(device)
-        x = xp.random.rand(*data_size)
-        if kwargs.get("sync",True):
-            if device == "xpu":
-                x.sycl_queue.wait()
+        if device == "xpu":
+            default_timers = [dpctl.SyclTimer() for _ in range(len(default_queues))]
+            for qid, q in enumerate(default_queues):
+                with default_timers[qid](queue=q):
+                    x = xp.random.rand(*data_size)
+                    q.wait()
+            return tuple(np.mean([(timer.dt.host_dt,timer.dt.device_dt) for timer in default_timers], axis=0))
+        else:
+            tic = time.time()
+            x = xp.random.rand(*data_size)
+            return tuple([time.time()-tic, time.time()-tic])
 
 class ScatterAdd(ComputeKernel):
     def __call__(self, device: str, data_size: tuple = (32, 32, 32), **kwargs):
+        tic = time.time()
         xp = get_device_module(device)
         y = xp.empty(np.prod(data_size), dtype=xp.float32)
         x = xp.empty(np.prod(data_size), dtype=xp.float32)
@@ -586,7 +672,7 @@ class ScatterAdd(ComputeKernel):
             }
             ''', 'my_scatter_add_kernel')
             # Implementation needed
-        return y
+        return tuple([time.time()-tic,time.time()-tic])
 
 def get_compute_kernel_from_string(kernel_name: str):
     kernel_name_lower = kernel_name.lower()

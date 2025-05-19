@@ -36,15 +36,17 @@ def main(np:int,
 
   env_sim = os.environ.copy()
   env_ai = os.environ.copy()
+  env_ai["ZE_FLAT_DEVICE_HIERARCHY"]="COMPOSITE"
+  env_sim["ZE_FLAT_DEVICE_HIERARCHY"]="COMPOSITE"
   env_ai["START_GPU"]="3"
   sim_process = subprocess.Popen(sim_cmd, cwd=os.path.dirname(__file__), shell=True, env=env_sim)
-  time.sleep(30) ##wait until the sim starts
+  time.sleep(1) ##wait until the sim starts
   train_ai_process = subprocess.Popen(train_ai_cmd, cwd=os.path.dirname(__file__), shell=True, env=env_ai)
 
   while train_ai_process.poll() is None:
     if sim_process.poll() is not None:
       print("Error: simulation failed!!")
-      traing_ai_process.kill()
+      train_ai_process.kill()
       break
     time.sleep(1)
 
