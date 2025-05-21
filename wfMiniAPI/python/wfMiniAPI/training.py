@@ -255,7 +255,7 @@ class AI(Component):
                 elapsed_time = time.time() - tic
                 rc += 1
             if self.logger:
-                self.logger.debug(f"Elapsed time {elapsed_time} target time {run_time} run count {rc}
+                self.logger.debug(f"Elapsed time {elapsed_time} target time {run_time} run count {rc}")
         else:
             for _ in range(run_count):
                 train(self.model, self.dataloader, self.criterion, self.optimizer, self.device, self.num_epochs, self.ddp)
@@ -265,7 +265,7 @@ class AI(Component):
                     torch.xpu.synchronize()
             elapsed_time = time.time() - tic
             if self.logger:
-                self.logger.debug(f"Elapsed time {elapsed_time} run count {run_count}
+                self.logger.debug(f"Elapsed time {elapsed_time} run count {run_count}")
         return elapsed_time
 
     def infer(self,run_time:float=None,run_count:int=None)->float:
@@ -282,7 +282,7 @@ class AI(Component):
         if run_time is not None:
             with torch.no_grad():
                 rc = 0
-                while elapsed_time < run_time
+                while elapsed_time < run_time:
                     outputs = self.model(inputs)
                     if self.device == 'cuda':
                         torch.cuda.synchronize()
@@ -302,7 +302,7 @@ class AI(Component):
                         torch.xpu.synchronize()
                 elapsed_time = time.time() - tic
                 if self.logger:
-                    self.logger.debug(f"Elapsed time {elapsed_time} run count {run_count}
+                    self.logger.debug(f"Elapsed time {elapsed_time} run count {run_count}")
         return
 
 
