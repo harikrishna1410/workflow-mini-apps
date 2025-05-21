@@ -4,6 +4,10 @@ import pickle
 import logging as logging_
 import sqlite3
 import shutil
+import subprocess
+import redis
+import socket
+from redis.cluster import RedisCluster
 
 class Component:
     def __init__(self, name, config:dict={"type":"filesystem"},logging=False,log_level=logging_.INFO):
@@ -11,14 +15,6 @@ class Component:
         self.config = config
         self.connections = []
         assert self.config["type"] in ["filesystem","node-local"]
-        if self.config["type"] == "filesystem" or self.config["type"] == "node-local":
-            # Ensure that tmp directory is empty
-            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
-            os.makedirs(dirname, exist_ok=True)
-        
-        if self.config["type"] == "node-local":
-            self.config["location"] = "/tmp"
-        
         if logging:
             # Setup logging
             self.logger = logging_.getLogger(name)
@@ -42,8 +38,86 @@ class Component:
             self.logger.debug(f"Component {name} initialized with config {config}")
         else:
             self.logger = None
+        
+        if self.config["type"] == "filesystem" or self.config["type"] == "node-local":
+            # Ensure that tmp directory is empty
+            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+            os.makedirs(dirname, exist_ok=True)
+        
+        if self.config["type"] == "node-local":
+            self.config["location"] = "/tmp"
+        
+        self.redis_process = None
+        self.redis_client = None
+        self.server_address = None
+        """
+        Example config:
+        {
+        "name" = "redis",
+        "role" = "server or client"
+        "db-type" = "clustered or colocated"
+        "server-address" = "nodename:port" (optional, only needed for client roles)
+        }
+        """
+        if self.config["type"] == "redis":
+            is_clustered = self.config["db-type"] == "clustered"
+            
+            if self.config["db-type"] not in ["clustered", "colocated"]:
+                raise ValueError(f"Unknown db type: {self.config['db-type']}")
+            
+            if self.config["role"] == "server":
+                if "redis-server-exe" not in self.config:
+                    raise ValueError("redis-server-exe must be specified for server role")
+                self._start_redis_server(clustered=is_clustered)
+            
+            elif self.config["role"] == "client":
+                if "server-address" not in self.config:
+                    raise ValueError(f"Server address is required for client role")
+                self.redis_client = self._create_redis_client(
+                    server_address=self.config["server-address"], 
+                    clustered=is_clustered
+                )
+            
+            elif self.config["role"] == "both":
+                if "redis-server-exe" not in self.config:
+                    raise ValueError("redis-server-exe must be specified for 'both' role")
+                self._start_redis_server(clustered=is_clustered)
+                time.sleep(2)  # Give the server time to start up
+                self.redis_client = self._create_redis_client(clustered=is_clustered)
+            
+            else:
+                raise ValueError(f"Unknown role for component {self.name}: {self.config['role']}")
 
-    def connect(self, other_node):
+    def _start_redis_server(self, clustered=False):
+        """Start a Redis server process."""
+        cmd_base = f"{self.config['redis-server-exe']} --port 6375 --bind 0.0.0.0 --protected-mode no"
+        cmd = f"{cmd_base} --cluster-enabled yes --cluster-config-file {self.name}.conf" if clustered else cmd_base
+            
+        self.redis_process = subprocess.Popen(cmd, shell=True, env=os.environ.copy())
+        self.server_address = f"{socket.gethostname()}:6375"
+        if self.logger:
+            self.logger.debug(f"Started Redis {'cluster ' if clustered else ''}server at {self.server_address}")
+
+    def _create_redis_client(self, server_address=None, clustered=False):
+        """Create a Redis client connection."""
+        address = server_address or self.server_address
+        if not address:
+            raise ValueError(f"Server address is required for client role in {self.name}")
+            
+        try:
+            host, port_str = address.split(":")
+            port = int(port_str)
+            client = RedisCluster(host=host, port=port) if clustered else redis.Redis(host=host, port=port)
+            client.ping()  # Test connection
+            if self.logger:
+                self.logger.debug(f"Connected to Redis {'cluster' if clustered else 'server'} at {address}")
+            return client
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to connect to Redis {'cluster' if clustered else 'server'}: {e}")
+            raise
+
+    def connect(self, other_node:any):
         """Connect this node to another node."""
         if other_node not in self.connections:
             self.connections.append(other_node)
@@ -117,8 +191,24 @@ class Component:
         """
         Function stages data as a key-value pair.
         The key and filename are stored in a database, while the data is saved in a file.
+        For Redis, the data is stored directly with the key.
         """
-        if self.config["type"] == "filesystem" or self.config["type"] == "node-local":
+        if self.config["type"] == "redis":
+            if not self.redis_client:
+                raise ValueError("Redis client not initialized")
+            
+            try:
+                # Serialize and store data directly in Redis
+                serialized_data = pickle.dumps(data)
+                self.redis_client.set(key, serialized_data)
+                if self.logger:
+                    self.logger.debug(f"Staged data for {key} in Redis")
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Failed to stage data in Redis: {e}")
+                raise
+            
+        elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             # Ensure the directory for files exists
             dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
             os.makedirs(dirname, exist_ok=True)
@@ -188,10 +278,32 @@ class Component:
     def stage_read(self, key):
         """
             Function reads the data from a staging area using the key.
-            the key is used to look up the filename in the database.
-            The data is then loaded from the file.
+            For filesystem/node-local, the key is used to look up the filename in the database.
+            For Redis, the data is retrieved directly using the key.
         """
-        if self.config["type"] == "filesystem" or self.config["type"] == "node-local":
+        if self.config["type"] == "redis":
+            if not self.redis_client:
+                raise ValueError("Redis client not initialized")
+            
+            try:
+                # Get data directly from Redis
+                serialized_data = self.redis_client.get(key)
+                if serialized_data is None:
+                    if self.logger:
+                        self.logger.error(f"Key {key} not found in Redis")
+                    raise ValueError(f"Key {key} not found in Redis")
+                    
+                # Deserialize the data
+                data = pickle.loads(serialized_data)
+                if self.logger:
+                    self.logger.debug(f"Read staged data for {key} from Redis")
+                return data
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Failed to read data from Redis: {e}")
+                raise
+            
+        elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             # Path to the SQLite database
             db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
 
@@ -229,12 +341,24 @@ class Component:
                 self.logger.error("Unsupported data transport type")
             raise ValueError("Unsupported data transport type")
     
-    def poll_staged_data(self,key):
+    def poll_staged_data(self, key):
         """
         Function checks if the data for the key is staged.
         It returns True if the data is staged, otherwise False.
         """
-        if self.config["type"] == "filesystem" or self.config["type"] == "node-local":
+        if self.config["type"] == "redis":
+            if not self.redis_client:
+                raise ValueError("Redis client not initialized")
+            
+            try:
+                # Check if key exists in Redis
+                return self.redis_client.exists(key) > 0
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Failed to poll data in Redis: {e}")
+                raise
+            
+        elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             # Path to the SQLite database
             db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
 
@@ -258,12 +382,33 @@ class Component:
                 self.logger.error("Unsupported data transport type")
             raise ValueError("Unsupported data transport type")
         
-    def clean_staged_data(self,key):
+    def clean_staged_data(self, key):
         """
         Function clears the staging area for the given key.
-        It removes the key-filename mapping from the database and deletes the file.
+        For filesystem/node-local, it removes the key-filename mapping and deletes the file.
+        For Redis, it deletes the key from the Redis database.
         """
-        if self.config["type"] == "filesystem" or self.config["type"] == "node-local":
+        if self.config["type"] == "redis":
+            if not self.redis_client:
+                raise ValueError("Redis client not initialized")
+            
+            try:
+                # Check if key exists
+                if not self.redis_client.exists(key):
+                    if self.logger:
+                        self.logger.error(f"Key {key} not found in Redis")
+                    raise ValueError(f"Key {key} not found in Redis")
+                
+                # Delete the key from Redis
+                self.redis_client.delete(key)
+                if self.logger:
+                    self.logger.debug(f"Cleared staged data for {key} from Redis")
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Failed to clean data in Redis: {e}")
+                raise
+            
+        elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             # Path to the SQLite database
             db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
 

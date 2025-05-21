@@ -9,7 +9,8 @@ setup(
         'h5py',
         'mpi4py',
         'torch',
-        'pytest'
+        'pytest',
+        'redis'
     ],
     extras_require={
         'gpu': ['dpnp','cupy']
