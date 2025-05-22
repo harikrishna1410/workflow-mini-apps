@@ -1,0 +1,11 @@
+{
+    "kernels":[
+        {
+            "name":"nekrs_iter",
+            "run_time":0.026108344198174694,
+            "data_size":[256,256],
+            "mini_app_kernel":"MatMulSimple2D",
+            "device":"xpu"
+        }
+    ]
+}

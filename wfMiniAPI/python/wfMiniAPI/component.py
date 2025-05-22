@@ -8,13 +8,14 @@ import subprocess
 import redis
 import socket
 from redis.cluster import RedisCluster
+import zlib
 
 class Component:
     def __init__(self, name, config:dict={"type":"filesystem"},logging=False,log_level=logging_.INFO):
         self.name = name
         self.config = config
         self.connections = []
-        assert self.config["type"] in ["filesystem","node-local"]
+        assert self.config["type"] in ["filesystem","node-local","redis"]
         if logging:
             # Setup logging
             self.logger = logging_.getLogger(name)
@@ -40,8 +41,11 @@ class Component:
             self.logger = None
         
         if self.config["type"] == "filesystem" or self.config["type"] == "node-local":
-            # Ensure that tmp directory is empty
-            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+            if "location" not in self.config:
+                self.config["location"] = os.path.join(os.getcwd(), ".tmp")
+            if "nshards" not in config:
+                self.config["nshards"] = 64
+            dirname = self.config.get("location")
             os.makedirs(dirname, exist_ok=True)
         
         if self.config["type"] == "node-local":
@@ -94,7 +98,7 @@ class Component:
         cmd = f"{cmd_base} --cluster-enabled yes --cluster-config-file {self.name}.conf" if clustered else cmd_base
             
         self.redis_process = subprocess.Popen(cmd, shell=True, env=os.environ.copy())
-        self.server_address = f"{socket.gethostname()}:6375"
+        self.server_address = f"{socket.gethostname()}:6375" if "port" not in self.config else f"{socket.gethostname()}:{self.config['port']}"
         if self.logger:
             self.logger.debug(f"Started Redis {'cluster ' if clustered else ''}server at {self.server_address}")
 
@@ -210,8 +214,7 @@ class Component:
             
         elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             # Ensure the directory for files exists
-            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
-            os.makedirs(dirname, exist_ok=True)
+            dirname = self.config["location"]
 
             # Generate a unique filename for the data file
             current_time = str(time.time())
@@ -220,9 +223,11 @@ class Component:
             # Save the data to the file
             with open(filename, "wb") as f:
                 pickle.dump(data, f)
-
+            
+            h = zlib.crc32(key.encode('utf-8'))
+            shard_number = h % self.config["nshards"]
             # Path to the SQLite database
-            db_path = os.path.join(dirname, f"staging.db")
+            db_path = os.path.join(dirname, f"staging_{shard_number}.db")
 
             # Connect to the database and store the key-filename mapping
             conn = sqlite3.connect(db_path)
@@ -268,8 +273,7 @@ class Component:
                     if self.logger:
                         self.logger.error(f"Key {key} already exists in the staging database")
                     raise ValueError(f"Key {key} already exists")
-                finally:
-                    conn.close()
+            conn.close()
         else:
             if self.logger:
                 self.logger.error("Unsupported data transport type")
@@ -305,7 +309,9 @@ class Component:
             
         elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             # Path to the SQLite database
-            db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
+            h = zlib.crc32(key.encode('utf-8'))
+            shard_number = h % self.config["nshards"]
+            db_path = os.path.join(self.config["location"], f"staging_{shard_number}.db")
 
             if not os.path.exists(db_path):
                 if self.logger:
@@ -314,7 +320,7 @@ class Component:
             # Connect to the database and retrieve the filename for the key
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-
+            
             # Query the database for the filename associated with the key
             cursor.execute("SELECT filename FROM staging WHERE key=?", (key,))
             row = cursor.fetchone()
@@ -360,7 +366,9 @@ class Component:
             
         elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             # Path to the SQLite database
-            db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
+            h = zlib.crc32(key.encode('utf-8'))
+            shard_number = h % self.config["nshards"]
+            db_path = os.path.join(self.config["location"], f"staging_{shard_number}.db")
 
             if not os.path.exists(db_path):
                 return False
@@ -410,7 +418,9 @@ class Component:
             
         elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             # Path to the SQLite database
-            db_path = os.path.join(self.config.get("location", os.path.join(os.getcwd(), ".tmp")), f"staging.db")
+            h = zlib.crc32(key.encode('utf-8'))
+            shard_number = h % self.config["nshards"]
+            db_path = os.path.join(self.config["location"], f"staging_{shard_number}.db")
 
             # Connect to the database and delete the key-filename mapping
             conn = sqlite3.connect(db_path)
@@ -426,17 +436,43 @@ class Component:
                 raise ValueError(f"Key {key} not found in the staging database")
 
             filename = row[0]
-
-            # Delete the key-filename mapping from the database
-            cursor.execute("DELETE FROM staging WHERE key=?", (key,))
-            conn.commit()
+            # Delete the key-filename mapping from the database with retry mechanism
+            max_retries = 5
+            retry_delay = 0.5  # seconds
+            attempt = 0
+            
+            while attempt < max_retries:
+                try:
+                    cursor.execute("DELETE FROM staging WHERE key=?", (key,))
+                    conn.commit()
+                    break  # Success, exit the loop
+                except sqlite3.OperationalError as e:
+                    if "database is locked" in str(e) or "readonly database" in str(e):
+                        attempt += 1
+                        if attempt < max_retries:
+                            if self.logger:
+                                self.logger.warning(f"Database {db_path} is locked/readonly. Waiting {retry_delay}s before retry {attempt}/{max_retries}")
+                            time.sleep(retry_delay)
+                            retry_delay *= 1.5  # Exponential backoff
+                        else:
+                            if self.logger:
+                                self.logger.error(f"Failed to delete from database after {max_retries} attempts: {e}")
+                            raise
+                    else:
+                        if self.logger:
+                            self.logger.error(f"Database error: {e}")
+                        raise
             conn.close()
 
             # Delete the file
             if os.path.exists(filename):
-                os.remove(filename)
-                if self.logger:
-                    self.logger.debug(f"Cleared staged data for {key} and deleted file {filename}")
+                try:
+                    os.remove(filename)
+                    if self.logger:
+                        self.logger.debug(f"Cleared staged data for {key} and deleted file {filename}")
+                except:
+                    if self.logger:
+                        self.logger.warning(f"Failed to delete file {filename}. The file may be in use or you may not have permission.")
             else:
                 if self.logger:
                     self.logger.error(f"File {filename} does not exist")

@@ -1,0 +1,17 @@
+   
+{
+   "ppn":12,
+   "nnodes":2,
+   "other_mpi_opts":" ./gpu_tile_compact-start.sh ", 
+   "run_time":0.1, 
+   "num_iters":100, 
+   "dt_config":{
+      "type":"redis",
+      "db-type":"colocated",
+      "role":"client",
+      "redis-server-exe":"/home/ht1410/redis/src/redis-server"
+   }, 
+   "read_freq":10, 
+   "data_size":4000000, 
+   "device":"xpu"
+}

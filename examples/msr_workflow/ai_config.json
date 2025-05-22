@@ -1,0 +1,14 @@
+   
+{
+   "ppn":12,
+   "nnodes":1,
+   "other_mpi_opts":" ./gpu_tile_compact-start.sh ", 
+   "run_time":0.1, 
+   "num_iters":100, 
+   "dt_config":{
+      "type":"filesystem"
+   }, 
+   "read_freq":10, 
+   "data_size":4000000, 
+   "device":"xpu"
+}
