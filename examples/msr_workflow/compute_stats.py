@@ -43,12 +43,14 @@ if __name__ == "__main__":
     logfiles = [
                 "logs_all_colocated_2node_per_component/sim_0.log",
                 "logs_db_and_ai_colocated_1node_per_component/sim_0.log",
+                "logs_db_and_sim_colocated_1node_per_component/sim_0.log",
                 "logs_pfs_1_node_per_component/sim_0.log",
                 "logs_all_colocated_2node_per_component/AI.log",
                 "logs_db_and_ai_colocated_1node_per_component/AI.log",
-                "logs_pfs_1_node_per_component/AI.log"
+                "logs_pfs_1_node_per_component/AI.log",
+                "logs_db_and_sim_colocated_1node_per_component/AI.log",
                 ]
-    nranks = [24,12,12,24,12,12]
+    nranks = [24,12,12,12,24,12,12,12]
     for i in range(len(logfiles)):
         print(f"logfile {logfiles[i]}")
         t=compute_throughput(logfiles[i],nranks[i],4000000)

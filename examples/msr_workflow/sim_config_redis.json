@@ -1,6 +1,6 @@
 {
    "ppn":12, 
-   "nnodes":2, 
+   "nnodes":1, 
    "other_mpi_opts":" --cpu-bind list:1:8:16:24:32:40:53:60:68:76:84:92 ./gpu_tile_compact-start.sh ", 
    "run_time":0.1, 
    "num_iters":100,  

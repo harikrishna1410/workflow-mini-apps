@@ -24,7 +24,7 @@ def main(ai_config_fname:str,sim_config_fname:str):
   with open(os.getenv("PBS_NODEFILE"),"r") as f:
     nodes = [l.split(".")[0] for l in f.readlines()]
 
-  db_nodes = nodes[:ai_config["nnodes"]]
+  db_nodes = nodes[ai_config["nnodes"]:]
   ai_nodes = nodes[:ai_config["nnodes"]]
   sim_nodes = nodes[ai_config["nnodes"]:]
 
@@ -60,14 +60,27 @@ def main(ai_config_fname:str,sim_config_fname:str):
     ##db is colocated with the AI nodes
     db_procs = []
     ###cmd for redis colocated db
-    for nid in range(ai_config["nnodes"]):
-        db_cmd = f"mpirun -n 1 -ppn 1 -hosts {nodes[nid]}"+\
+    for node in db_nodes:
+        db_cmd = f"mpirun -n 1 -ppn 1 -hosts {node}"+\
               f" {ai_config['dt_config']['redis-server-exe']} --port 6375 --bind 0.0.0.0 --protected-mode no"
+        if ai_config["dt_config"]["type"] == "clustered":
+          db_cmd += f" --cluster-enabled yes --cluster-config-file {nodes}.conf"
         p = subprocess.Popen(db_cmd, cwd=os.path.dirname(__file__), shell=True, env=env)
         db_procs.append(p)
 
     ##wait to db to start
-    time.sleep(30)
+    time.sleep(10)
+    if ai_config["dt_config"]["type"] == "clustered":
+      start = time.time()
+      ##connect the clusters
+      create_cmd = f"/home/ht1410/redis/src/redis-cli --cluster create " \
+             f"{' '.join([f'{node}:6375' for node in db_nodes])} --cluster-replicas 0"
+      subprocess.run(create_cmd, shell=True, check=True)
+      print(f"It took {time.time()-start}s to start the cluster!")
+      time.sleep(10)
+
+  # # Wait for cluster to initialize
+  time.sleep(5)
 
   sim_procs = []
   for i in range(nsims):

@@ -9,6 +9,7 @@ import redis
 import socket
 from redis.cluster import RedisCluster
 import zlib
+from redis.cluster import ClusterNode
 
 class Component:
     def __init__(self, name, config:dict={"type":"filesystem"},logging=False,log_level=logging_.INFO):
@@ -53,72 +54,116 @@ class Component:
         
         self.redis_process = None
         self.redis_client = None
-        self.server_address = None
         """
         Example config:
         {
         "name" = "redis",
         "role" = "server or client"
         "db-type" = "clustered or colocated"
-        "server-address" = "nodename:port" (optional, only needed for client roles)
+        "server-address" = "nodename:port",
+        "server-options" = {"mpi-options":""} (optional)
         }
         """
         if self.config["type"] == "redis":
-            is_clustered = self.config["db-type"] == "clustered"
-            
             if self.config["db-type"] not in ["clustered", "colocated"]:
                 raise ValueError(f"Unknown db type: {self.config['db-type']}")
             
             if self.config["role"] == "server":
                 if "redis-server-exe" not in self.config:
                     raise ValueError("redis-server-exe must be specified for server role")
-                self._start_redis_server(clustered=is_clustered)
+                if "server-address" not in self.config:
+                    raise ValueError(f"Server address is required")
+                self.redis_process = self._start_redis_server()
             
             elif self.config["role"] == "client":
                 if "server-address" not in self.config:
-                    raise ValueError(f"Server address is required for client role")
-                self.redis_client = self._create_redis_client(
-                    server_address=self.config["server-address"], 
-                    clustered=is_clustered
-                )
+                    raise ValueError(f"Server address is required")
+                self.redis_client = self._create_redis_client()
             
             elif self.config["role"] == "both":
                 if "redis-server-exe" not in self.config:
                     raise ValueError("redis-server-exe must be specified for 'both' role")
-                self._start_redis_server(clustered=is_clustered)
+                if "server-address" not in self.config:
+                    raise ValueError(f"Server address is required")
+                self.redis_process= self._start_redis_server()
                 time.sleep(2)  # Give the server time to start up
-                self.redis_client = self._create_redis_client(clustered=is_clustered)
+                self.redis_client = self._create_redis_client()
             
             else:
                 raise ValueError(f"Unknown role for component {self.name}: {self.config['role']}")
 
-    def _start_redis_server(self, clustered=False):
+    def _start_redis_server(self):
         """Start a Redis server process."""
-        cmd_base = f"{self.config['redis-server-exe']} --port 6375 --bind 0.0.0.0 --protected-mode no"
-        cmd = f"{cmd_base} --cluster-enabled yes --cluster-config-file {self.name}.conf" if clustered else cmd_base
+        address = self.config["server-address"]
+        is_clustered = self.config["db-type"] == "clustered"
+        
+        host = address.split(":")[0]
+        port = address.split(":")[1]
+        
+        cmd_base = f"mpirun -np 1 -ppn 1 -hosts {host} {self.config.get('server-options',{}).get('mpi-options','')} {self.config['redis-server-exe']} --port {port} --bind 0.0.0.0 --protected-mode no"
+        cmd = f"{cmd_base} --cluster-enabled yes --cluster-config-file {self.name}.conf" if is_clustered else cmd_base
             
-        self.redis_process = subprocess.Popen(cmd, shell=True, env=os.environ.copy())
-        self.server_address = f"{socket.gethostname()}:6375" if "port" not in self.config else f"{socket.gethostname()}:{self.config['port']}"
+        redis_process = subprocess.Popen(cmd, shell=True, env=os.environ.copy())
         if self.logger:
-            self.logger.debug(f"Started Redis {'cluster ' if clustered else ''}server at {self.server_address}")
+            self.logger.debug(f"Started Redis {'cluster ' if is_clustered else ''}server at {address}")
+        return redis_process
 
-    def _create_redis_client(self, server_address=None, clustered=False):
+    def _create_redis_client(self):
         """Create a Redis client connection."""
-        address = server_address or self.server_address
-        if not address:
-            raise ValueError(f"Server address is required for client role in {self.name}")
+        address = self.config["server-address"]
+        is_clustered = self.config["db-type"] == "clustered"
             
         try:
-            host, port_str = address.split(":")
-            port = int(port_str)
-            client = RedisCluster(host=host, port=port) if clustered else redis.Redis(host=host, port=port)
-            client.ping()  # Test connection
+            if is_clustered:
+                hosts = []
+                ports = []
+                for address in self.config["server-address"].split(","):
+                    host, port_str = address.split(":")
+                    port = int(port_str)
+                    ##
+                    hosts.append(host)
+                    ports.append(port)
+                # Check which hosts are reachable
+                reachable_hosts = []
+                reachable_ports = []
+                for host, port in zip(hosts, ports):
+                    try:
+                        # Try to establish a connection to check if host is reachable
+                        sock = socket.create_connection((host, port), timeout=5)
+                        sock.close()
+                        reachable_hosts.append(host)
+                        reachable_ports.append(port)
+                        if self.logger:
+                            self.logger.debug(f"Host {host}:{port} is reachable")
+                    except (socket.timeout, socket.error) as e:
+                        if self.logger:
+                            self.logger.warning(f"Host {host}:{port} is not reachable: {e}")
+
+                if not reachable_hosts:
+                    error_msg = "No reachable Redis hosts found"
+                    if self.logger:
+                        self.logger.error(error_msg)
+                    raise ConnectionError(error_msg)
+
+                # Update hosts and ports to only include reachable ones
+                hosts = reachable_hosts
+                ports = reachable_ports
+                # Create a list of startup nodes for the Redis Cluster
+                startup_nodes = [{"host": host, "port": port} for host, port in zip(hosts, ports)]
+                startup_nodes = [ClusterNode(host=host, port=port) for host, port in zip(hosts, ports)]
+                client = RedisCluster(startup_nodes=startup_nodes)
+                client.ping()  # Test connection
+            else:
+                host, port_str = address.split(":")
+                port = int(port_str)
+                client = redis.Redis(host=host, port=port)
+                client.ping()  # Test connection
             if self.logger:
-                self.logger.debug(f"Connected to Redis {'cluster' if clustered else 'server'} at {address}")
+                self.logger.debug(f"Connected to Redis {'cluster' if is_clustered else 'server'} at {address}")
             return client
         except Exception as e:
             if self.logger:
-                self.logger.error(f"Failed to connect to Redis {'cluster' if clustered else 'server'}: {e}")
+                self.logger.error(f"Failed to connect to Redis {'cluster' if is_clustered else 'server'}: {e}")
             raise
 
     def connect(self, other_node:any):
@@ -505,3 +550,13 @@ class Component:
             if self.logger:
                 self.logger.error("Unsupported data transport type")
             raise ValueError("Unsupported data transport type")
+
+    def poll_redis_server(self):
+        if self.redis_process:
+            return self.redis_process.poll() is None
+        return False
+    
+    def stop_redis_server(self):
+        if self.redis_process:
+            self.redis_process.terminate()
+            self.redis_process.wait()
