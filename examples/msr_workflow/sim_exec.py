@@ -1,3 +1,5 @@
+import mpi4py
+mpi4py.rc.initialize=False
 from mpi4py import MPI
 from wfMiniAPI.simulation import Simulation as sim
 import argparse
@@ -5,6 +7,8 @@ import numpy as np
 import logging as logging_
 import time
 import json
+import socket
+import pickle
 
 """
 Here a simulation is defined using sim_telemetry.json. This telemetry data has the following details  
@@ -19,22 +23,55 @@ Here a simulation is defined using sim_telemetry.json. This telemetry data has t
   Then waits for the AI to consume the data and put its inference result back to the simulation.
 """
 
-def main(write_freq:int,data_size:int,dtype,config:dict,niters:int,sim_id:int,db_addresses:str=None,ppn:int=None):
+def main(write_freq:int,
+         data_size:int,
+         config:dict,
+         niters:int,
+         sim_id:int,
+         init_MPI:bool=True,
+         rank:int=0,
+         size:int=1,
+         ddict=None,
+         db_addresses:str=None,
+         ppn:int=None,
+         dtype=np.float32):
     # Initialize MPI
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    size = comm.Get_size()
+    if init_MPI:
+        MPI.Init()
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        size = comm.Get_size()
 
+    my_hostname = socket.gethostname()
     # Create a simulation object
     logging = rank==0
     if config["type"] == "redis":
         assert db_addresses is not None and ppn is not None
-        config["server-address"] = db_addresses.split(",")[rank//ppn]
-    simulation = sim(name=f"sim_{sim_id}", comm=comm, config=config,logging=logging,log_level=logging_.INFO)
+        config['role'] = "client"
+        if config["db-type"] == "clustered":
+            ##connect to all dbs on my node
+            config["server-address"] = db_addresses
+        else:
+            local_dbs = [ad for ad in db_addresses.split(",") if my_hostname in ad]
+            local_rank = rank%ppn
+            ##assign in round robin fashion
+            config["server-address"] = local_dbs[local_rank%len(local_dbs)]
+            with open("sim_to_db.txt","a") as f:
+                f.write(f"sim_{sim_id}_{rank} {local_dbs[local_rank%len(local_dbs)]}\n")
+    elif config["type"] == "dragon":
+        config["server-address"] = db_addresses
+        config['role'] = "client"
+        if ddict is not None:
+            config["server-obj"] = ddict
+        else:
+            with open("server_obj.pickle", 'r') as f:
+                config["server-obj"] = f.read()
+    simulation = sim(name=f"sim_{sim_id}_{rank}", comm=(comm if init_MPI else None), config=config,logging=logging,log_level=logging_.DEBUG)
 
     # Initialize the simulation from a JSON file
     simulation.init_from_json("sim_telemetry.json")
-    comm.Barrier()
+    if init_MPI:
+        comm.Barrier()
     i=0
     while i < niters:
         tic = time.time()
@@ -54,14 +91,8 @@ def main(write_freq:int,data_size:int,dtype,config:dict,niters:int,sim_id:int,db
         
         if simulation.logger:
             simulation.logger.info(f"tstep time: {iter_time}, returned tstep time {iter_dt_out}, dt time: {data_write_time}")
-        # ##check for data
-        # if simulation.poll_staged_data(f"ai_data_{rank}"):
-        #     data = simulation.stage_read(f"ai_data_{rank}")
-        #     if data=="kill_sim":
-        #         if simulation.logger:
-        #             simulation.logger.info("Received kill message!")
-        #         break
         i+=1
+    simulation.stop_client()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -74,4 +105,10 @@ if __name__ == "__main__":
         config = json.load(f)    
 
     
-    main(config["write_freq"], config["data_size"], np.float32, config["dt_config"], config["num_iters"],args.sim_id,db_addresses=args.db_addresses,ppn=config["ppn"])
+    main(config["write_freq"], 
+         config["data_size"], 
+         config["dt_config"], 
+         config["num_iters"],
+         args.sim_id,
+         db_addresses=args.db_addresses,
+         ppn=config["ppn"])

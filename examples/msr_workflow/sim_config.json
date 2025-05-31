@@ -5,7 +5,7 @@
    "run_time":0.1, 
    "num_iters":100, 
    "dt_config":{
-      "type":"filesystem"
+      "type":"node-local"
    }, 
    "write_freq":10, 
    "data_size":4000000
