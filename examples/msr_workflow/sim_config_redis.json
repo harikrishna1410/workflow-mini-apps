@@ -1,14 +1,1 @@
-{
-   "ppn":12, 
-   "nnodes":3, 
-   "other_mpi_opts":" --cpu-bind list:1:8:16:24:32:40:53:60:68:76:84:92 ./gpu_tile_compact-start.sh ", 
-   "run_time":0.1, 
-   "num_iters":100,  
-   "dt_config":{
-      "type":"redis",
-      "db-type":"clustered",
-      "redis-server-exe":"/home/ht1410/redis/src/redis-server"
-   },
-   "write_freq":10, 
-   "data_size":4000000
-}
+{"ppn": 12, "nnodes": 1, "other_mpi_opts": " --cpu-bind list:1:8:16:24:32:40:53:60:68:76:84:92 ./gpu_tile_compact-start.sh ", "run_time": 0.1, "num_iters": 100, "dt_config": {"type": "redis", "db-type": "colocated", "redis-server-exe": "/home/ht1410/redis/src/redis-server"}, "write_freq": 10, "data_size": 4000000}

@@ -32,6 +32,7 @@ def main(write_freq:int,
          rank:int=0,
          size:int=1,
          ddict=None,
+         nrequests:int=1,
          db_addresses:str=None,
          ppn:int=None,
          dtype=np.float32):
@@ -53,6 +54,9 @@ def main(write_freq:int,
             config["server-address"] = db_addresses
         else:
             local_dbs = [ad for ad in db_addresses.split(",") if my_hostname in ad]
+            if len(local_dbs) == 0:
+                ##no local dbs 
+                local_dbs = db_addresses.split(",")
             local_rank = rank%ppn
             ##assign in round robin fashion
             config["server-address"] = local_dbs[local_rank%len(local_dbs)]
@@ -83,7 +87,8 @@ def main(write_freq:int,
             tic = time.time()
             if simulation.logger:
                 simulation.logger.debug(f"Write the data: sim_data_{rank}_{i//write_freq}")
-            simulation.stage_write(f"sim_{sim_id}_{rank}_{i//write_freq}", np.empty(data_size, dtype=dtype))
+            for req_id in range(nrequests):
+                simulation.stage_write(f"sim_{sim_id}_{rank}_{i//write_freq}_{req_id}", np.empty(data_size, dtype=dtype))
             toc = time.time()
             data_write_time = toc - tic
         else:
@@ -99,6 +104,7 @@ if __name__ == "__main__":
     parser.add_argument("--config_name", type=str, required=True, help="Sim config")
     parser.add_argument("--sim_id", type=int, required=True, help="Sim index")
     parser.add_argument("--db_addresses", type=str, default=None)
+    parser.add_argument("--nrequests",type=int,default=1)
     args = parser.parse_args()
 
     with open(args.config_name,"r") as f:
@@ -111,4 +117,5 @@ if __name__ == "__main__":
          config["num_iters"],
          args.sim_id,
          db_addresses=args.db_addresses,
-         ppn=config["ppn"])
+         ppn=config["ppn"],
+         nrequests=args.nrequests)

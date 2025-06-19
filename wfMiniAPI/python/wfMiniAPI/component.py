@@ -72,6 +72,8 @@ class Component:
             "server-options" = {key:value} (optional,same as ddict options). provide  same server-options for client and server
             }
             """
+        if self.logger and self.config["type"] in ["redis","dragon"]:
+            self.logger.info(f"Launching db on {self.config['server-address']} my hostname {socket.gethostname()}")
         match self.config["type"]:
             case "filesystem":
                 if "location" not in self.config:
@@ -123,6 +125,7 @@ class Component:
                         self.dragon_dict.setup_logging()
                         if isinstance(self.dragon_dict,DDict):
                             if self.logger:
+                                self.logger.info(f"DRAGON_DEFAULT_SEG_SIZE={os.getenv('DRAGON_DEFAULT_SEG_SIZE')}")
                                 self.logger.info("ddcit creating successful!")
                         else:
                             if self.logger:

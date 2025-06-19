@@ -64,7 +64,7 @@ def set_up_servers(config_in:dict,server_addresses:list,nservers_per_node:int):
     return servers
 #********************************************************************************************
 #********************************************************************************************
-def launch_ai_mpi(ai_config_fname:str,sim_config_fname:str,ai_nodes:list,sim_nodes:list,server_addresses:list):
+def launch_ai_mpi(ai_config_fname:str,sim_config_fname:str,ai_nodes:list,sim_nodes:list,server_addresses:list,nrequests:int):
   with open(ai_config_fname, 'r') as f:
     ai_config = json.load(f)
 
@@ -74,7 +74,7 @@ def launch_ai_mpi(ai_config_fname:str,sim_config_fname:str,ai_nodes:list,sim_nod
   nsims = len(sim_nodes)//sim_config["nnodes"]
   ai_cmd = f"mpirun -n {ai_config['ppn']*ai_config['nnodes']} -ppn {ai_config['ppn']}"+\
            f" --hosts {','.join(ai_nodes)} {ai_config['other_mpi_opts']}"+\
-           f" python ai_exec.py --config {ai_config_fname} --nsims {nsims}"
+           f" python ai_exec.py --config {ai_config_fname} --nsims {nsims} --nrequests {nrequests}"
   if ai_config["dt_config"]["type"] == "redis":
       ai_cmd += f" --db_addresses {','.join(server_addresses)}"
   
@@ -84,7 +84,7 @@ def launch_ai_mpi(ai_config_fname:str,sim_config_fname:str,ai_nodes:list,sim_nod
   return [ai_process]
 #********************************************************************************************
 #********************************************************************************************
-def launch_ai_dragon(ai_config_fname:str,sim_config_fname:str,ai_nodes:list,sim_nodes:list,dragon_server:Component):
+def launch_ai_dragon(ai_config_fname:str,sim_config_fname:str,ai_nodes:list,sim_nodes:list,dragon_server:Component,nrequests:int):
   with open(ai_config_fname, 'r') as f:
     ai_config = json.load(f)
 
@@ -121,7 +121,8 @@ def launch_ai_dragon(ai_config_fname:str,sim_config_fname:str,ai_nodes:list,sim_
                                                 False, ##init_MPI
                                                 nid*ai_config["ppn"]+local_rank, ##rank
                                                 ai_config["nnodes"]*ai_config["ppn"], ##size
-                                                dragon_server.dragon_dict
+                                                dragon_server.dragon_dict,
+                                                nrequests
                                               ),
                                     cwd=os.path.dirname(__file__),
                                     policy=policy,stdout=Popen.DEVNULL,env=env
@@ -132,7 +133,7 @@ def launch_ai_dragon(ai_config_fname:str,sim_config_fname:str,ai_nodes:list,sim_
   return [ai_pg]
 #********************************************************************************************
 #********************************************************************************************
-def launch_simulations_mpi(sim_config_fname:str,sim_nodes:list,server_addresses:list):
+def launch_simulations_mpi(sim_config_fname:str,sim_nodes:list,server_addresses:list,nrequests:int):
   # Load simulation configuration
   with open(sim_config_fname, 'r') as f:
     sim_config = json.load(f)
@@ -149,7 +150,7 @@ def launch_simulations_mpi(sim_config_fname:str,sim_nodes:list,server_addresses:
     ##launch sim on all other nodes
     sim_cmd = f"mpirun -n {np_sim} -ppn {sim_config['ppn']} -hosts {','.join(sim_nodes[ns:ne])}"+\
               f" {sim_config['other_mpi_opts']} python sim_exec.py"+\
-              f" --config {sim_config_fname} --sim_id {sim_id}"
+              f" --config {sim_config_fname} --sim_id {sim_id} --nrequests {nrequests}"
     if sim_config["dt_config"]["type"] == "redis":
       sim_cmd += f" --db_addresses {','.join(server_addresses)}"
     
@@ -159,7 +160,7 @@ def launch_simulations_mpi(sim_config_fname:str,sim_nodes:list,server_addresses:
 
 #********************************************************************************************
 #********************************************************************************************
-def launch_simulations_dragon(sim_config_fname:str,sim_nodes:list,dragon_server):
+def launch_simulations_dragon(sim_config_fname:str,sim_nodes:list,dragon_server,nrequests:int):
   # Load simulation configuration
   with open(sim_config_fname, 'r') as f:
     sim_config = json.load(f)
@@ -197,6 +198,7 @@ def launch_simulations_dragon(sim_config_fname:str,sim_nodes:list,dragon_server)
                                                           nid*sim_config["ppn"]+local_rank,##rank
                                                           sim_config["ppn"]*sim_config["nnodes"],
                                                           dragon_server.dragon_dict,
+                                                          nrequests
                                                          ), 
                                                     cwd=os.path.dirname(__file__), 
                                                     stdout=Popen.DEVNULL,
@@ -243,7 +245,7 @@ def split_nodes(ai_config_fname:str,method:int=2):
 def clean_up(ai_config:dict):
 
   if ai_config["dt_config"]["type"] == "redis":
-    fpath = os.path.join(os.path.dirname(__file__),"sim_to_db.txt")
+    fpath = "sim_to_db.txt"
     if os.path.exists(fpath):
       os.remove(fpath)
   elif ai_config["dt_config"]["type"] in ["filesystem","dragon"]:
@@ -258,7 +260,7 @@ def clean_up(ai_config:dict):
 
 #********************************************************************************************
 #********************************************************************************************
-def main(ai_config_fname:str,sim_config_fname:str,ndb_per_node:int=1,placement:int=2):
+def main(ai_config_fname:str,sim_config_fname:str,ndb_per_node:int=1,placement:int=2,nrequests:int=1):
   with open(ai_config_fname, 'r') as f:
     ai_config = json.load(f)
 
@@ -276,8 +278,8 @@ def main(ai_config_fname:str,sim_config_fname:str,ndb_per_node:int=1,placement:i
     servers = set_up_servers(ai_config["dt_config"],db_addresses,ndb_per_node)
 
   if ai_config["dt_config"]["type"] == "dragon":
-    sim_pgs = launch_simulations_dragon(sim_config_fname,sim_nodes,servers[0])
-    ai_pg = launch_ai_dragon(ai_config_fname,sim_config_fname,ai_nodes,sim_nodes,servers[0])[0]
+    sim_pgs = launch_simulations_dragon(sim_config_fname,sim_nodes,servers[0],nrequests)
+    ai_pg = launch_ai_dragon(ai_config_fname,sim_config_fname,ai_nodes,sim_nodes,servers[0],nrequests)[0]
     ai_pg.join()
     ai_pg.close()
     ##wait
@@ -288,9 +290,11 @@ def main(ai_config_fname:str,sim_config_fname:str,ndb_per_node:int=1,placement:i
         pg.stop()
       pg.close()
   else:
-    sim_procs = launch_simulations_mpi(sim_config_fname,sim_nodes,db_addresses)
-    time.sleep(30)
-    ai_procs = launch_ai_mpi(ai_config_fname,sim_config_fname,ai_nodes,sim_nodes,db_addresses)
+    sim_procs = launch_simulations_mpi(sim_config_fname,sim_nodes,db_addresses,nrequests)
+    if ai_config["dt_config"]["type"] == "redis" and ai_config["dt_config"]["db-type"] == "colocated":
+      while not os.path.exists("sim_to_db.txt"):
+        time.sleep(1)
+    ai_procs = launch_ai_mpi(ai_config_fname,sim_config_fname,ai_nodes,sim_nodes,db_addresses,nrequests)
 
     while ai_procs[0].poll() is None or any(p.poll() is None for p in sim_procs):
       time.sleep(1)
@@ -329,6 +333,8 @@ if __name__ == "__main__":
   parser.add_argument("--ai_config", type=str, default="ai_config.json", help="Path to JSON configuration file")
   parser.add_argument("--ndb_per_node",type=int,default=1)
   parser.add_argument("--placement",type=int,default=2)
+  parser.add_argument("--data_size",type=int,default=4000000)
+  parser.add_argument("--nrequests",type=int,default=1)
   args = parser.parse_args()
   
   
@@ -356,5 +362,14 @@ if __name__ == "__main__":
   
   assert sim_config["ppn"] == ai_config["ppn"] and sim_config["nnodes"] == ai_config["nnodes"]
   assert ai_config["dt_config"]["type"] == sim_config["dt_config"]["type"]
+
+  ai_config["data_size"] = args.data_size
+  sim_config["data_size"] = args.data_size
+
+  with open(args.ai_config,"w") as f:
+    json.dump(ai_config,f)
   
+  with open(args.sim_config,"w") as f:
+    json.dump(sim_config,f)
+
   main(args.ai_config,args.sim_config,args.ndb_per_node,args.placement)

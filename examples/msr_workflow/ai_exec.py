@@ -26,7 +26,8 @@ def main(device:str,
          init_MPI=True,
          rank:int=0,
          size:int=1,
-         ddict=None):
+         ddict=None,
+         nrequests:int=1):
     # Initialize MPI
     if init_MPI:
         MPI.Init()
@@ -70,14 +71,15 @@ def main(device:str,
             nread = 0
             tstart = time.time()
             dt_time = 0.0
-            while nread != nsims and  time.time() - tstart < 10:
+            while nread != nsims*nrequests and  time.time() - tstart < 100:
                 for sim_id in range(nsims):
-                    if train_ai.poll_staged_data(f"sim_{sim_id}_{rank}_{i//update_frequency}",client_id=sim_to_client[f"sim_{sim_id}_{rank}"] if config["type"] == "redis" and config["db-type"] == "colocated" else 0):
-                        tic = time.time()
-                        data = train_ai.stage_read(f"sim_{sim_id}_{rank}_{i//update_frequency}",client_id=sim_to_client[f"sim_{sim_id}_{rank}"] if config["type"] == "redis" and config["db-type"] == "colocated" else 0)
-                        train_ai.clean_staged_data(f"sim_{sim_id}_{rank}_{i//update_frequency}",client_id=sim_to_client[f"sim_{sim_id}_{rank}"] if config["type"] == "redis" and config["db-type"] == "colocated" else 0)
-                        dt_time += time.time() - tic
-                        nread+=1
+                    for req_id in range(nrequests):
+                        if train_ai.poll_staged_data(f"sim_{sim_id}_{rank}_{i//update_frequency}_{req_id}",client_id=sim_to_client[f"sim_{sim_id}_{rank}"] if config["type"] == "redis" and config["db-type"] == "colocated" else 0):
+                            tic = time.time()
+                            data = train_ai.stage_read(f"sim_{sim_id}_{rank}_{i//update_frequency}_{req_id}",client_id=sim_to_client[f"sim_{sim_id}_{rank}"] if config["type"] == "redis" and config["db-type"] == "colocated" else 0)
+                            train_ai.clean_staged_data(f"sim_{sim_id}_{rank}_{i//update_frequency}_{req_id}",client_id=sim_to_client[f"sim_{sim_id}_{rank}"] if config["type"] == "redis" and config["db-type"] == "colocated" else 0)
+                            dt_time += time.time() - tic
+                            nread+=1
                 time.sleep(1.0)
             dt_time_total = time.time() - tstart
             if nread != nsims:
@@ -99,6 +101,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, required=True, help="help")
     parser.add_argument("--nsims", type=int, required=True, help="device")
     parser.add_argument("--db_addresses", type=str, default=None, help="help")
+    parser.add_argument("--nrequests",type=int,default=1)
     args = parser.parse_args()
     with open(args.config,"r") as f:
         config = json.load(f)
@@ -110,4 +113,5 @@ if __name__ == "__main__":
         config["dt_config"], 
         args.nsims,
         args.db_addresses,
-        config["ppn"])
+        config["ppn"],
+        nrequests=args.nrequests)
