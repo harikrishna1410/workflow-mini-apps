@@ -51,27 +51,27 @@ class Component:
         self.redis_client = None
         self.dragon_dict = None
 
-
         """
         Example redis config:
         {
         "name" = "redis",
         "role" = "server or client"
-        "db-type" = "clustered or colocated"
+        "db-type" = "clustered, colocated, non-clustered"
+                   "clustered" implies a redis cluster,
+                   "colocated" implies a colocated redis server on the same node as the client,
+                   "non-clustered" implies redis server that are neither cololocated nor clustered
         "server-address" = "nodename:port",
         "server-options" = {"mpi-options":""} (optional)
         }
+        Example dragon config:
+        {
+        "name" = "dragon",
+        "role" = "server or client"
+        "server-address" = "nodename1:port,nodename2:port",
+        "server-obj" = serialize ddict string  obtained from ddict.serialize() (required for client role)
+        "server-options" = {key:value} (optional,same as ddict options). provide  same server-options for client and server
+        }
         """
-        """
-            Example dragon config:
-            {
-            "name" = "dragon",
-            "role" = "server or client"
-            "server-address" = "nodename1:port,nodename2:port",
-            "server-obj" = serialize ddict string  obtained from ddict.serialize() (required for client role)
-            "server-options" = {key:value} (optional,same as ddict options). provide  same server-options for client and server
-            }
-            """
         if self.logger and self.config["type"] in ["redis","dragon"]:
             self.logger.info(f"Launching db on {self.config['server-address']} my hostname {socket.gethostname()}")
         match self.config["type"]:
@@ -111,7 +111,7 @@ class Component:
                         if "server-address" not in self.config:
                             raise ValueError(f"Server address is required")
                         self.redis_process = self._start_redis_server()
-                        time.sleep(2)  # Give the server time to start up
+                        # Redis server readiness is already checked in _start_redis_server
                         self.redis_client = self._create_redis_client()
                     
                     case _:
@@ -175,6 +175,8 @@ class Component:
         opts["n_nodes"] = None
         opts["managers_per_node"] = None
         d = DDict(**opts)
+        if self.logger:
+            self.logger.info(f"Dragon dictionary created with options {opts}")
         return d
         
     def _start_redis_server(self):
@@ -183,7 +185,7 @@ class Component:
         is_clustered = self.config["db-type"] == "clustered"
         
         host = address.split(":")[0]
-        port = address.split(":")[1]
+        port = int(address.split(":")[1])
         
         cmd_base = f"mpirun -np 1 -ppn 1 -hosts {host} {self.config.get('server-options',{}).get('mpi-options','')} {self.config['redis-server-exe']} --port {port} --bind 0.0.0.0 --protected-mode no"
         cmd = f"{cmd_base} --cluster-enabled yes --cluster-config-file {self.name}.conf" if is_clustered else cmd_base
@@ -191,6 +193,10 @@ class Component:
         redis_process = subprocess.Popen(cmd, shell=True, env=os.environ.copy(),stdout=subprocess.DEVNULL)
         if self.logger:
             self.logger.debug(f"Started Redis {'cluster ' if is_clustered else ''}server at {address}")
+        
+        # Wait for Redis server to be ready
+        self._wait_for_redis_server(host, port)
+        
         return redis_process
 
     def _create_redis_client(self):
@@ -238,7 +244,21 @@ class Component:
                 client = RedisCluster(startup_nodes=startup_nodes)
                 client.ping()  # Test connection
                 clients.append(client)
-            else:
+            elif self.config["db-type"] == "colocated":
+                my_hostname = socket.gethostname()
+                for address in self.config["server-address"].split(","):
+                    if my_hostname not in address:
+                        if self.logger: self.logger.warning(f"Skipping address {address} as it does not match the current hostname {my_hostname}")
+                        continue
+                    else:
+                        if self.logger: self.logger.info(f"Creating colocated Redis client for address {address}")
+                    host, port_str = address.split(":")
+                    port = int(port_str)
+                    client = redis.Redis(host=host, port=port)
+                    client.ping()  # Test connection
+                    clients.append(client)
+                assert len(clients) > 0, "No colocated Redis clients created"
+            else:  # Non-clustered Redis server
                 for address in self.config["server-address"].split(","):
                     host, port_str = address.split(":")
                     port = int(port_str)
@@ -538,14 +558,19 @@ class Component:
 
             if not os.path.exists(db_path):
                 return False
+            if self.logger:
+                self.logger.debug(f"Polling for {key} in database {db_path}")
             # Connect to the database and check if the key exists
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
 
-            # Query the database for the filename associated with the key
-            cursor.execute("SELECT filename FROM staging WHERE key=?", (key,))
-            row = cursor.fetchone()
-            conn.close()
+            try:
+                # Query the database for the filename associated with the key
+                cursor.execute("SELECT filename FROM staging WHERE key=?", (key,))
+                row = cursor.fetchone()
+                conn.close()
+            except sqlite3.OperationalError as e:
+                return False
 
             if row is None:
                 return False
@@ -706,4 +731,36 @@ class Component:
             self.dragon_dict.detach()
         if self.logger:
             self.logger.info("done stopping client!")
+
+    def _wait_for_redis_server(self, host, port, max_retries=30, retry_delay=1.0):
+        """Wait for Redis server to be ready by attempting connections."""
+        if self.logger:
+            self.logger.info(f"Waiting for Redis server at {host}:{port} to be ready...")
+        
+        for attempt in range(max_retries):
+            try:
+                # Try to establish a connection to check if Redis is ready
+                sock = socket.create_connection((host, port), timeout=5)
+                sock.close()
+                
+                # Additional check: try to create a Redis client and ping
+                test_client = redis.Redis(host=host, port=port, socket_connect_timeout=5)
+                test_client.ping()
+                test_client.close()
+                
+                if self.logger:
+                    self.logger.info(f"Redis server at {host}:{port} is ready (attempt {attempt + 1})")
+                return
+                
+            except (socket.timeout, socket.error, redis.ConnectionError, redis.TimeoutError) as e:
+                if self.logger and attempt == 0:
+                    self.logger.debug(f"Redis server not ready yet: {e}")
+                
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                else:
+                    error_msg = f"Redis server at {host}:{port} failed to start after {max_retries} attempts"
+                    if self.logger:
+                        self.logger.error(error_msg)
+                    raise ConnectionError(error_msg)
 

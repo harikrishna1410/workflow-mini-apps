@@ -7,15 +7,15 @@ import time
 
 """
 Here a simulation is defined using sim_telemetry.json. This telemetry data has the following details  
-  "name": name of the simulation step,
-  "mini_app_kernel":name of the mini app kernel to be used (optional),
-  "run_count": number of times to run the kernel (optional),
-  "data_size": size of the data to be used (optional),
-  "device": device to be used (optional),
-  "run_time": time to run the kernel. This takes precedence over "run_count" (optional),
+    "name": name of the simulation step,
+    "mini_app_kernel":name of the mini app kernel to be used (optional),
+    "run_count": number of times to run the kernel (optional),
+    "data_size": size of the data to be used (optional),
+    "device": device to be used (optional),
+    "run_time": time to run the kernel. This takes precedence over "run_count" (optional),
 
-  the simulation simply runs for certaing numer of steps and stages data for the AI to read.
-  Then waits for the AI to consume the data and put its inference result back to the simulation.
+    the simulation simply runs for certaing numer of steps and stages data for the AI to read.
+    Then waits for the AI to consume the data and put its inference result back to the simulation.
 """
 
 def main(write_freq=1,data_size=32*32*32,dtype=np.float64,config={"type":"filesystem"}):

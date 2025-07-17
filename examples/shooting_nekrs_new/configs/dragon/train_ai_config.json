@@ -1,0 +1,16 @@
+{
+    "ppn": 6, 
+    "nnodes": 2, 
+    "run_time": 0.05, 
+    "num_iters": 100, 
+    "dt_config": {
+                    "type": "dragon", 
+                    "server-options":{"total_mem":107374182400}
+                }, 
+    "read_freq": 10, 
+    "data_size": 319488, 
+    "nrequests": 1,
+    "device": "xpu",
+    "cpu_bind": "53,60,68,76,84,92",
+    "gpu_bind": "3.0,3.1,4.0,4.1,5.0,5.1"
+}

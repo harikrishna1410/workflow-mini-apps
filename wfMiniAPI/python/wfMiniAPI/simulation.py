@@ -5,24 +5,26 @@ from wfMiniAPI.kernel import *
 import os
 import sys
 import logging as _logging
+import socket
 
 class Simulation(Component):
-    def __init__(self,name="SIM",comm=None,config:dict={"type":"filesystem"},logging=False,log_level=_logging.INFO):
+    def __init__(self,name="SIM",comm=None,config:dict={"type":"filesystem"},logging=False,log_level=_logging.INFO,**kwargs):
         super().__init__(name,config=config,logging=logging,log_level=log_level)
         self.name = name
         self.comm = comm
         self.kernels = []
         self.ktoi = {}
+
         if self.comm is not None:
             self.size = self.comm.Get_size()
             self.rank = self.comm.Get_rank()
             self.local_rank = os.environ.get("MPI_LOCALRANKID",0)
-            if self.logger:
-                self.logger.debug(f"Setting the local rank as {self.local_rank}")
         else:
-            self.size = 1
-            self.rank = 0
-            self.local_rank = 0
+            self.size = kwargs.get("size", 1)
+            self.rank = kwargs.get("rank", 0)
+            self.local_rank = kwargs.get("local_rank", 0)
+        if self.logger:
+            self.logger.info(f"Simulation initialized with name {self.name}, rank {self.rank}, size {self.size}, local_rank {self.local_rank}")
 
     def init_from_dict(self, config:dict):
         kernels = config.get('kernels', [])

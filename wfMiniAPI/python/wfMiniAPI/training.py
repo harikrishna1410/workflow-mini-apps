@@ -256,6 +256,7 @@ class AI(Component):
                 rc += 1
             if self.logger:
                 self.logger.debug(f"Elapsed time {elapsed_time} target time {run_time} run count {rc}")
+            return elapsed_time, rc
         else:
             for _ in range(run_count):
                 train(self.model, self.dataloader, self.criterion, self.optimizer, self.device, self.num_epochs, self.ddp)
@@ -266,7 +267,7 @@ class AI(Component):
             elapsed_time = time.time() - tic
             if self.logger:
                 self.logger.debug(f"Elapsed time {elapsed_time} run count {run_count}")
-        return elapsed_time
+            return elapsed_time, run_count
 
     def infer(self,run_time:float=None,run_count:int=None)->float:
         """Perform inference on inputs."""

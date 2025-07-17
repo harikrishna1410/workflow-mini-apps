@@ -1,0 +1,10 @@
+{
+    "ppn": 6, 
+    "nnodes": 2, 
+    "other_mpi_opts": " --cpu-bind list:1:8:16:24:32:40 ./gpu_tile_compact-start.sh ",  
+    "dt_config": {"type": "redis", "db-type": "colocated", "redis-server-exe": "/home/ht1410/redis/src/redis-server"}, 
+    "sim_telemetry": "configs/sim_telemetry.json",
+    "write_freq": 100, 
+    "nrequests": 1,
+    "data_size": 319488
+}

@@ -1,0 +1,14 @@
+{
+    "ppn": 6, 
+    "nnodes": 2, 
+    "dt_config":{
+                    "type":"dragon",
+                    "server-options":{"total_mem":107374182400}
+                }, 
+    "sim_telemetry": "configs/sim_telemetry.json",
+    "write_freq": 100, 
+    "nrequests": 1,
+    "data_size": 319488,
+    "cpu_bind": "1,8,16,24,32,40",
+    "gpu_bind": "0.0,0.1,1.0,1.1,2.0,2.1"
+}
