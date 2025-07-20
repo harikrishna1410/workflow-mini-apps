@@ -1,3 +1,104 @@
+"""
+Component module for workflow mini-apps providing data storage and server management.
+
+Complete Workflow Examples:
+
+1. Filesystem-based Workflow:
+```python
+# Server side
+server_config = {"type": "filesystem", "server-address": "./data", "nshards": 32}
+server = ServerManager("fs_server", server_config)
+server.start_server()
+
+# Client side - use server info directly
+server_info = server.get_server_info()
+datastore = DataStore("worker1", server_info)
+# OR use serialized string
+serialized = server.serialize()
+datastore = DataStore("worker1", serialized)
+
+datastore.stage_write("results", {"accuracy": 0.95})
+data = datastore.stage_read("results")
+```
+
+2. Redis Server + Client Workflow (Colocated):
+```python
+# Server side
+server_config = {
+    "type": "redis",
+    "db-type": "colocated",
+    "server-address": "localhost:6379",
+    "redis-server-exe": "/usr/bin/redis-server"
+}
+server = ServerManager("redis_server", server_config)
+server.start_server()
+
+# Client side - use server info directly
+server_info = server.get_server_info()
+datastore = DataStore("worker1", server_info)
+# OR use serialized string for remote clients
+serialized = server.serialize()
+datastore = DataStore("worker1", serialized)
+
+datastore.stage_write("model_weights", weights_data)
+```
+
+3. Redis Cluster Workflow:
+```python
+# Start multiple Redis servers first, then create cluster
+server_addresses = ["node1:6379", "node2:6379", "node3:6379"]
+ServerManager.create_redis_cluster(server_addresses)
+
+# Server side
+server_config = {
+    "type": "redis",
+    "db-type": "clustered",
+    "server-address": "node1:6379,node2:6379,node3:6379",
+    "redis-server-exe": "/usr/bin/redis-server"
+}
+server = ServerManager("redis_cluster", server_config)
+server.start_server()
+
+# Client side - use server info directly
+datastore = DataStore("worker1", server.get_server_info())
+```
+
+4. Dragon Dictionary Workflow:
+```python
+# Server side
+server_config = {
+    "type": "dragon",
+    "server-address": "node1:7777,node2:7777",
+    "server-options": {"n_nodes": 2, "wait_for_keys": True}
+}
+server = ServerManager("dragon_server", server_config)
+server.start_server()
+
+# Client side - use server info directly
+server_info = server.get_server_info()
+datastore = DataStore("worker1", server_info)
+# OR use serialized string for transmission
+serialized = server.serialize()
+datastore = DataStore("worker1", serialized)
+```
+
+5. Serialization for Remote Deployment:
+```python
+# Server side
+server = ServerManager("my_server", config)
+server.start_server()
+
+# Serialize server info to base64 string
+serialized_server = server.serialize()
+
+# Send serialized_server to remote clients via network, file, etc.
+
+# Client side (potentially on different machine)
+datastore = DataStore("remote_client", serialized_server)
+# DataStore automatically deserializes and configures client
+```
+"""
+
 import time
 import os
 import sys
@@ -11,6 +112,7 @@ import socket
 from redis.cluster import RedisCluster
 import zlib
 from redis.cluster import ClusterNode
+import base64
 try:
     import dragon
     from dragon.data.ddict import DDict
@@ -18,6 +120,13 @@ try:
 except:
     DRAGON_AVAILABLE=False
 
+try:
+    import cloudpickle
+    CLOUDPICKLE_AVAILABLE = True
+except ImportError:
+    import pickle as cloudpickle
+    CLOUDPICKLE_AVAILABLE = False
+from typing import Union, List, Dict
 
 class ServerManager:
     """
@@ -27,7 +136,7 @@ class ServerManager:
     def __init__(self, name, config: dict, logging=False, log_level=logging_.INFO):
         self.name = name
         self.config = config
-        self.redis_process = None
+        self.redis_processes = []  # Changed from single process to list
         self.dragon_dict = None
         
         # Setup logging
@@ -54,53 +163,68 @@ class ServerManager:
 
     def _setup_server(self):
         """Setup the appropriate server based on configuration."""
-        if self.config["type"] not in ["redis", "dragon"]:
-            return  # No server needed for filesystem/node-local
-        
         if self.logger:
             self.logger.info(f"Setting up {self.config['type']} server on {self.config.get('server-address', 'unknown')}")
         
-        if self.config["type"] == "redis":
-            if self.config["role"] in ["server", "both"]:
-                if "redis-server-exe" not in self.config:
-                    raise ValueError("redis-server-exe must be specified for server role")
-                if "server-address" not in self.config:
-                    raise ValueError("Server address is required")
-                self.redis_process = self._start_redis_server()
+        if self.config["type"] == "filesystem":
+            if "server-address" not in self.config:
+                self.config["server-address"] = os.path.join(os.getcwd(), ".tmp")
+            if "nshards" not in self.config:
+                self.config["nshards"] = 64
+            dirname = self.config["server-address"]
+            os.makedirs(dirname, exist_ok=True)
+            if self.logger:
+                self.logger.info(f"Created filesystem directory at {dirname}")
+        
+        elif self.config["type"] == "node-local":
+            self.config["server-address"] = "/tmp"
+            if "nshards" not in self.config:
+                self.config["nshards"] = 64
+            if self.logger:
+                self.logger.info(f"Using node-local directory {self.config['server-address']}")
+        
+        elif self.config["type"] == "redis":
+            if "redis-server-exe" not in self.config:
+                raise ValueError("redis-server-exe must be specified for Redis server")
+            if "server-address" not in self.config:
+                raise ValueError("Server address is required")
+            self.redis_processes = self._start_redis_server()
         
         elif self.config["type"] == "dragon":
             if not DRAGON_AVAILABLE:
                 raise ValueError("Dragon is not available")
-            if self.config["role"] == "server":
-                self.dragon_dict = self._start_dragon_dictionary()
-                if self.dragon_dict:
-                    self.dragon_dict.setup_logging()
-                    if isinstance(self.dragon_dict, DDict):
-                        if self.logger:
-                            self.logger.info("Dragon dictionary created successfully!")
-                    else:
-                        if self.logger:
-                            self.logger.warning("Dragon dictionary creation failed!")
+            self.dragon_dict = self._start_dragon_dictionary()
+            if self.dragon_dict:
+                self.dragon_dict.setup_logging()
+                if isinstance(self.dragon_dict, DDict):
+                    if self.logger:
+                        self.logger.info("Dragon dictionary created successfully!")
+                else:
+                    if self.logger:
+                        self.logger.warning("Dragon dictionary creation failed!")
     
     def _start_redis_server(self):
-        """Start a Redis server process."""
-        address = self.config["server-address"]
+        """Start Redis server processes for all addresses."""
+        addresses = self.config["server-address"].split(",")
         is_clustered = self.config["db-type"] == "clustered"
+        redis_processes = []
         
-        host = address.split(":")[0]
-        port = int(address.split(":")[1])
-        
-        cmd_base = f"mpirun -np 1 -ppn 1 -hosts {host} {self.config.get('server-options',{}).get('mpi-options','')} {self.config['redis-server-exe']} --port {port} --bind 0.0.0.0 --protected-mode no"
-        cmd = f"{cmd_base} --cluster-enabled yes --cluster-config-file {self.name}.conf" if is_clustered else cmd_base
+        for address in addresses:
+            host = address.strip().split(":")[0]
+            port = int(address.strip().split(":")[1])
             
-        redis_process = subprocess.Popen(cmd, shell=True, env=os.environ.copy(), stdout=subprocess.DEVNULL)
-        if self.logger:
-            self.logger.debug(f"Started Redis {'cluster ' if is_clustered else ''}server at {address}")
+            cmd_base = f"mpirun -np 1 -ppn 1 -hosts {host} {self.config.get('server-options',{}).get('mpi-options','')} {self.config['redis-server-exe']} --port {port} --bind 0.0.0.0 --protected-mode no"
+            cmd = f"{cmd_base} --cluster-enabled yes --cluster-config-file {self.name}_{host}_{port}.conf" if is_clustered else cmd_base
+                
+            redis_process = subprocess.Popen(cmd, shell=True, env=os.environ.copy(), stdout=subprocess.DEVNULL)
+            if self.logger:
+                self.logger.debug(f"Started Redis {'cluster ' if is_clustered else ''}server at {address}")
+            
+            # Wait for Redis server to be ready
+            self._wait_for_redis_server(host, port)
+            redis_processes.append(redis_process)
         
-        # Wait for Redis server to be ready
-        self._wait_for_redis_server(host, port)
-        
-        return redis_process
+        return redis_processes
     
     def _start_dragon_dictionary(self):
         """Start a Dragon dictionary server."""
@@ -173,9 +297,9 @@ class ServerManager:
                     raise ConnectionError(error_msg)
     
     def poll_redis_server(self):
-        """Check if Redis server process is still running."""
-        if self.redis_process:
-            return self.redis_process.poll() is None
+        """Check if all Redis server processes are still running."""
+        if self.redis_processes:
+            return all(process.poll() is None for process in self.redis_processes)
         return False
     
     def stop_server(self):
@@ -183,13 +307,14 @@ class ServerManager:
         if self.logger:
             self.logger.info("Stopping server!")
         
-        if self.config["type"] == "redis" and self.redis_process:
-            self.redis_process.terminate()
-            self.redis_process.wait()
+        if self.config["type"] == "redis" and self.redis_processes:
+            for process in self.redis_processes:
+                process.terminate()
+                process.wait()
             if self.logger:
-                self.logger.info("Redis server stopped")
+                self.logger.info(f"Stopped {len(self.redis_processes)} Redis server(s)")
         
-        elif self.config["type"] == "dragon" and self.dragon_dict and self.config["role"] == "server":
+        elif self.config["type"] == "dragon" and self.dragon_dict:
             self.dragon_dict.destroy()
             if self.logger:
                 self.logger.info("Dragon dictionary destroyed")
@@ -202,16 +327,15 @@ class ServerManager:
         info = {
             "name": self.name,
             "type": self.config["type"],
-            "address": self.config.get("server-address"),
-            "role": self.config.get("role")
+            "config": self.config.copy()  # Include the full config
         }
         
         if self.config["type"] == "redis":
             info["running"] = self.poll_redis_server()
         elif self.config["type"] == "dragon":
-            info["dragon_dict"] = self.dragon_dict is not None
+            info["dragon_dict"] = self.dragon_dict
             if self.dragon_dict and hasattr(self.dragon_dict, 'serialize'):
-                info["serialized"] = self.dragon_dict.serialize()
+                info["serial_dragon_dict"] = self.dragon_dict.serialize()
         
         return info
 
@@ -310,20 +434,75 @@ class ServerManager:
             if logger:
                 logger.error(error_msg)
             raise RuntimeError(error_msg)
+    
+    def serialize(self):
+        """
+        Serialize the server object for transmission or storage.
+        
+        Returns:
+            str: Base64-encoded serialized server info
+            
+        Raises:
+            RuntimeError: If serialization fails
+        """
+        try:
+            server_info = self.get_server_info()
+            serialized_bytes = cloudpickle.dumps(server_info)
+            serialized_str = base64.b64encode(serialized_bytes).decode('utf-8')
+            if self.logger:
+                self.logger.info(f"Server info serialized successfully")
+            return serialized_str
+        except Exception as e:
+            error_msg = f"Failed to serialize server info: {e}"
+            if self.logger:
+                self.logger.error(error_msg)
+            raise RuntimeError(error_msg)
+
+    @classmethod
+    def deserialize(cls, serialized_data):
+        """
+        Deserialize server data and return server info.
+        
+        Args:
+            serialized_data (str): Base64-encoded serialized server data
+            
+        Returns:
+            dict: Server info dictionary
+            
+        Raises:
+            RuntimeError: If deserialization fails
+        """
+        try:
+            # Decode base64 string to bytes
+            serialized_bytes = base64.b64decode(serialized_data.encode('utf-8'))
+            
+            # Use cloudpickle to deserialize
+            server_info = cloudpickle.loads(serialized_bytes)
+            
+            if not isinstance(server_info, dict):
+                raise ValueError("Invalid serialized server data format")
+            
+            return server_info
+                
+        except Exception as e:
+            error_msg = f"Failed to deserialize server data: {e}"
+            raise RuntimeError(error_msg)
+
 
 class DataStore:
     """
     Handles client-side data operations including read, write, send, receive, and staging.
     Works with various backends: filesystem, node-local, Redis, and Dragon.
+    
+    Initialized with serialized server info from ServerManager.serialize() or ServerManager.get_server_info()
     """
-    def __init__(self, name, config: dict = {"type": "filesystem"}, logging=False, log_level=logging_.INFO):
+    def __init__(self, name, server_info:Union[str, dict], logging=False, log_level=logging_.INFO):
         self.name = name
-        self.config = config
         self.connections = []
         self.redis_client = None
         self.dragon_dict = None
-        
-        # Setup logging
+
+                # Setup logging
         if logging:
             self.logger = logging_.getLogger(f"{name}_datastore")
             self.logger.setLevel(log_level)
@@ -337,45 +516,68 @@ class DataStore:
             formatter = logging_.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
             file_handler.setFormatter(formatter)
             self.logger.addHandler(file_handler)
-        
-            self.logger.debug(f"DataStore {name} initialized with config {config}")
         else:
             self.logger = None
-        
+
+        # Use ServerManager.deserialize to get server info and extract client config
+        if isinstance(server_info, str):
+            # Handle base64-encoded serialized data
+            deserialized_server_info = ServerManager.deserialize(server_info)
+            self.config = deserialized_server_info["config"].copy()
+            # Add Dragon-specific info if needed
+            if deserialized_server_info.get("type") == "dragon" and "serial_dragon_dict" in deserialized_server_info:
+                self.config["server-obj"] = deserialized_server_info["serial_dragon_dict"]
+        elif isinstance(server_info, dict):
+            if "config" in server_info:
+                self.config = server_info["config"].copy()
+                # Add Dragon-specific info if needed
+                if server_info.get("type") == "dragon":
+                    if server_info.get("dragon_dict", None) is not None and isinstance(server_info["dragon_dict"], DDict):
+                        if self.logger:
+                            self.logger.info("Using provided Dragon dictionary object")
+                        self.config["server-obj"] = server_info["dragon_dict"]
+                    elif "serial_dragon_dict" in server_info:
+                        self.config["server-obj"] = server_info["serial_dragon_dict"]
+            else:
+                raise ValueError("Invalid server info dict format")
+        else:
+            raise ValueError("server_info must be str (base64) or dict")
+
+        if self.logger:
+            self.logger.debug(f"DataStore {name} initialized with config {self.config}")
         # Initialize client connections
         self._setup_client()
     
     def _setup_client(self):
         """Setup client connections based on configuration."""
         if self.config["type"] == "filesystem":
-            if "location" not in self.config:
-                self.config["location"] = os.path.join(os.getcwd(), ".tmp")
+            if "server-address" not in self.config:
+                self.config["server-address"] = os.path.join(os.getcwd(), ".tmp")
             if "nshards" not in self.config:
                 self.config["nshards"] = 64
-            dirname = self.config.get("location")
-            os.makedirs(dirname, exist_ok=True)
 
         elif self.config["type"] == "node-local":
-            self.config["location"] = "/tmp"
+            if "server-address" not in self.config:
+                self.config["server-address"] = "/tmp"
             if "nshards" not in self.config:
                 self.config["nshards"] = 64
 
         elif self.config["type"] == "redis":
-            if self.config["role"] in ["client", "both"]:
-                if "server-address" not in self.config:
-                    raise ValueError("Server address is required for Redis client")
-                self.redis_client = self._create_redis_client()
+            if "server-address" not in self.config:
+                raise ValueError("Server address is required for Redis client")
+            self.redis_client = self._create_redis_client()
         
         elif self.config["type"] == "dragon":
             if not DRAGON_AVAILABLE:
                 raise ValueError("Dragon is not available")
-            if self.config["role"] == "client":
-                if isinstance(self.config["server-obj"], str):
-                    self.dragon_dict = DDict.attach(self.config["server-obj"], trace=True)
-                elif isinstance(self.config["server-obj"], DDict):
-                    self.dragon_dict = self.config["server-obj"]
-                else:
-                    raise ValueError("Unknown server-obj type for Dragon client")
+            if isinstance(self.config["server-obj"], bytes):
+                self.dragon_dict = DDict.attach(self.config["server-obj"], trace=True)
+            elif isinstance(self.config["server-obj"], str):
+                self.dragon_dict = DDict.attach(self.config["server-obj"], trace=True)
+            elif isinstance(self.config["server-obj"], DDict):
+                self.dragon_dict = self.config["server-obj"]
+            else:
+                raise ValueError("Unknown server-obj type for Dragon client")
     
     def _create_redis_client(self):
         """Create a Redis client connection."""
@@ -475,7 +677,7 @@ class DataStore:
             self.logger.debug(f"Sending data: {data}")
         
         if self.config["type"] == "filesystem" or self.config["type"] == "node-local":
-            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+            dirname = self.config.get("server-address", os.path.join(os.getcwd(), ".tmp"))
             os.makedirs(dirname, exist_ok=True)
             for target in targets:
                 filename = os.path.join(dirname, f"{self.name}_{target.name}_data.pickle")
@@ -492,7 +694,7 @@ class DataStore:
         """Receive data from connected senders."""
         data = {}
         senders = senders or self.connections
-        dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+        dirname = self.config.get("server-address", os.path.join(os.getcwd(), ".tmp"))
         
         if not os.path.exists(dirname):
             if self.logger:
@@ -552,7 +754,7 @@ class DataStore:
                 raise
             
         elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
-            dirname = self.config["location"]
+            dirname = self.config["server-address"]
             current_time = str(time.time())
             filename = os.path.join(dirname, f"{self.name}_{current_time}.pickle")
 
@@ -643,7 +845,7 @@ class DataStore:
         elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             h = zlib.crc32(key.encode('utf-8'))
             shard_number = h % self.config["nshards"]
-            db_path = os.path.join(self.config["location"], f"staging_{shard_number}.db")
+            db_path = os.path.join(self.config["server-address"], f"staging_{shard_number}.db")
 
             if not os.path.exists(db_path):
                 if self.logger:
@@ -704,7 +906,7 @@ class DataStore:
         elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             h = zlib.crc32(key.encode('utf-8'))
             shard_number = h % self.config["nshards"]
-            db_path = os.path.join(self.config["location"], f"staging_{shard_number}.db")
+            db_path = os.path.join(self.config["server-address"], f"staging_{shard_number}.db")
 
             if not os.path.exists(db_path):
                 return False
@@ -758,7 +960,7 @@ class DataStore:
         elif self.config["type"] == "filesystem" or self.config["type"] == "node-local":
             h = zlib.crc32(key.encode('utf-8'))
             shard_number = h % self.config["nshards"]
-            db_path = os.path.join(self.config["location"], f"staging_{shard_number}.db")
+            db_path = os.path.join(self.config["server-address"], f"staging_{shard_number}.db")
 
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -823,13 +1025,13 @@ class DataStore:
     def clean(self):
         """Clean up the datastore."""
         if self.config["type"] == "filesystem":
-            dirname = self.config.get("location", os.path.join(os.getcwd(), ".tmp"))
+            dirname = self.config.get("server-address", os.path.join(os.getcwd(), ".tmp"))
             if os.path.exists(dirname):
                 shutil.rmtree(dirname)
                 if self.logger:
                     self.logger.debug(f"Cleaned up directory {dirname}")
         elif self.config["type"] == "node-local":
-            fname = os.path.join(self.config["location"], "staging.db")
+            fname = os.path.join(self.config["server-address"], "staging.db")
             if os.path.exists(fname):
                 os.remove(fname)
         elif self.config["type"] == "dragon":
@@ -841,103 +1043,11 @@ class DataStore:
             if self.logger:
                 self.logger.debug("No cleanup needed for this backend type")
 
+    def flush_logger(self):
+        if self.logger:
+            for handler in self.logger.handlers:
+                handler.flush()
+
     def __repr__(self):
         return f"<DataStore name={self.name}, type={self.config['type']}>"
-
-
-# For backward compatibility, keep the Component class but deprecate it
-class Component:
-    """
-    DEPRECATED: Component class is deprecated. Use DataStore for data operations 
-    and ServerManager for server management instead.
-    
-    This class is maintained for backward compatibility only.
-    """
-    def __init__(self, name, config: dict = {"type": "filesystem"}, logging=False, log_level=logging_.INFO):
-        import warnings
-        warnings.warn(
-            "Component class is deprecated. Use DataStore for data operations and ServerManager for server management.",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        
-        self.name = name
-        self.config = config
-        
-        # Create a DataStore for data operations
-        self.datastore = DataStore(name, config, logging, log_level)
-        
-        # Create a ServerManager if this is a server role
-        self.server_manager = None
-        if config.get("type") in ["redis", "dragon"] and config.get("role") in ["server", "both"]:
-            self.server_manager = ServerManager(name, config, logging, log_level)
-    
-    # Delegate all methods to the appropriate new classes
-    def connect(self, other_node):
-        return self.datastore.connect(other_node)
-    
-    def disconnect(self, other_node):
-        return self.datastore.disconnect(other_node)
-    
-    def send(self, data, targets=None):
-        return self.datastore.send(data, targets)
-    
-    def receive(self, senders=None):
-        return self.datastore.receive(senders)
-    
-    def stage_write(self, key, data, persistant=True, client_id=0):
-        return self.datastore.stage_write(key, data, persistant, client_id)
-    
-    def stage_read(self, key, client_id=0):
-        return self.datastore.stage_read(key, client_id)
-    
-    def poll_staged_data(self, key, client_id=0):
-        return self.datastore.poll_staged_data(key, client_id)
-    
-    def clean_staged_data(self, key, client_id=0):
-        return self.datastore.clean_staged_data(key, client_id)
-    
-    def get_connections(self):
-        return self.datastore.get_connections()
-    
-    def clean(self):
-        return self.datastore.clean()
-    
-    # Server management methods
-    def poll_redis_server(self):
-        if self.server_manager:
-            return self.server_manager.poll_redis_server()
-        return False
-    
-    def stop_server(self):
-        if self.server_manager:
-            return self.server_manager.stop_server()
-    
-    def stop_client(self):
-        return self.datastore.clean()
-    
-    def __repr__(self):
-        return f"<Component(DEPRECATED) name={self.name}>"
-    
-    @property
-    def logger(self):
-        return self.datastore.logger
-    
-    @property
-    def connections(self):
-        return self.datastore.connections
-    
-    @property
-    def redis_client(self):
-        return self.datastore.redis_client
-    
-    @property
-    def dragon_dict(self):
-        return self.datastore.dragon_dict
-    
-    @property
-    def redis_process(self):
-        if self.server_manager:
-            return self.server_manager.redis_process
-        return None
 

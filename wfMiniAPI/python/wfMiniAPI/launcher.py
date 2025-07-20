@@ -1,6 +1,8 @@
 import os
 import multiprocessing
 import socket
+import subprocess
+import shlex
 from typing import List, Union, Dict, Any, Callable, Tuple, Optional
 
 # Handle Dragon imports and type hints
@@ -34,8 +36,8 @@ class BasicLauncher:
     
     Requires ensemble_launcher to be installed.
     """
-    
-    def __init__(self, system: str = "local", launcher_config: Dict[str, Any] = None):
+
+    def __init__(self, sys_info: dict = {"name": "local"}, launcher_config: Dict[str, Any] = None):
         """
         Initialize the BasicLauncher.
         
@@ -43,7 +45,7 @@ class BasicLauncher:
             system: System name (e.g., "local", "aurora", "polaris")
             launcher_config: Configuration for the launcher
         """
-        self.system = system
+        self.sys_info = sys_info
         self.launcher_config = launcher_config or {"mode": "mpi"}
         
     @staticmethod
@@ -83,11 +85,21 @@ class BasicLauncher:
         # Handle both string executables and Python callables
         if isinstance(workflow_component.executable, str):
             cmd_template = workflow_component.executable
+            
+            # Add args if provided - format as "key value" pairs
+            args = getattr(workflow_component, 'args', None)
+            if args:
+                # Convert dict to "key value" format
+                for key, value in args.items():
+                    cmd_template += f" {key} {value}"
         else:
             # For Python callables, we need to create a shell command that can execute them
             # since ensemble_launcher uses cmd_template for actual task execution
             import base64
             import pickle
+            
+            # Get args for the callable
+            component_args = getattr(workflow_component, 'args', None)
             
             # Try to use cloudpickle for better serialization, fallback to pickle
             try:
@@ -101,13 +113,32 @@ class BasicLauncher:
             try:
                 encoded_func = base64.b64encode(serialized_func).decode('ascii')
                 
-                # Create command that deserializes and executes the function
+                # Serialize args if present
+                encoded_args = ""
+                if component_args:
+                    try:
+                        if pickle_module == "cloudpickle":
+                            serialized_args = cloudpickle.dumps(component_args)
+                        else:
+                            serialized_args = pickle.dumps(component_args)
+                        encoded_args = base64.b64encode(serialized_args).decode('ascii')
+                    except:
+                        encoded_args = ""
+                
+                # Create command that deserializes and executes the function with args
                 cmd_template = (
                     f"python3 -c \""
                     f"import base64; import {pickle_module}; "
                     f"func = {pickle_module}.loads(base64.b64decode('{encoded_func}')); "
-                    f"func()\""
                 )
+                
+                if encoded_args:
+                    cmd_template += f"args = {pickle_module}.loads(base64.b64decode('{encoded_args}')); "
+                    # Args will always be a dict, so use **args for keyword arguments
+                    cmd_template += "func(**args)\""
+                else:
+                    cmd_template += "func()\""
+                    
             except Exception:
                 # Final fallback - assume it's a simple function call
                 func_name = getattr(workflow_component.executable, '__name__', 'unknown_function')
@@ -126,11 +157,10 @@ class BasicLauncher:
         ppn = getattr(workflow_component, 'ppn', 1)
         
         # Get GPU information
-        num_gpus_per_process = 0
+        num_gpus_per_process = getattr(workflow_component, 'num_gpus_per_process', 0)
         gpu_affinity = None
         if hasattr(workflow_component, 'gpu_affinity') and workflow_component.gpu_affinity:
             gpu_affinity = workflow_component.gpu_affinity
-            num_gpus_per_process = len(gpu_affinity) // (num_nodes * ppn) if len(gpu_affinity) > 0 else 0
         
         # Get CPU affinity
         cpu_affinity = getattr(workflow_component, 'cpu_affinity', None)
@@ -138,19 +168,25 @@ class BasicLauncher:
         # Get environment variables
         env_vars = getattr(workflow_component, 'env_vars', {})
         
+        run_dir = getattr(workflow_component, 'run_dir', os.path.join(os.getcwd(), "run_dir"))
+        io = True
+        log_file = getattr(workflow_component, 'log_file', os.path.join(run_dir, f"{getattr(workflow_component, 'name')}.log"))
+        err_file = getattr(workflow_component, 'err_file', os.path.join(run_dir, f"{getattr(workflow_component, 'name')}.err"))
         # Create task_info using the helper function
         task_info = create_task_info(
             task_id=task_id,
             cmd_template=cmd_template,
-            system=self.system,
+            system=self.sys_info["name"],
             num_nodes=num_nodes,
             num_processes_per_node=ppn,
             num_gpus_per_process=num_gpus_per_process,
             gpu_affinity=gpu_affinity,
             cpu_affinity=cpu_affinity,
             env=env_vars,
-            run_dir=getattr(workflow_component, 'run_dir', None),
-            launch_dir=getattr(workflow_component, 'launch_dir', None),
+            io=io,
+            log_file=log_file,
+            err_file=err_file,
+            run_dir=run_dir,
             timeout=getattr(workflow_component, 'timeout', None)
         )
         
@@ -182,12 +218,9 @@ class BasicLauncher:
         # Get nodes list
         nodes = workflow_component.nodes if hasattr(workflow_component, 'nodes') and workflow_component.nodes else [socket.gethostname()]
         
-        # Create system info
-        sys_info = {
-            "name": self.system,
-            "ncores_per_node": getattr(workflow_component, 'ncores_per_node', multiprocessing.cpu_count()),
-            "ngpus_per_node": getattr(workflow_component, 'ngpus_per_node', 0)
-        }
+        if self.sys_info["name"] == "local":
+            self.sys_info["ncores_per_node"] = getattr(workflow_component, 'ncores_per_node', multiprocessing.cpu_count())
+            self.sys_info["ngpus_per_node"] = getattr(workflow_component, 'ngpus_per_node', 0)
         
         # Create worker instance
         worker_id = f"worker_{task_id}"
@@ -197,7 +230,7 @@ class BasicLauncher:
             worker_id=worker_id,
             my_tasks=my_tasks,
             my_nodes=nodes,
-            sys_info=sys_info,
+            sys_info=self.sys_info,
             comm_config=comm_config,
             launcher_config=self.launcher_config
         )
@@ -219,13 +252,15 @@ class BasicLauncher:
         return process
     
     @staticmethod
-    def _launch_dragon_component(workflow_component, dragon_dict=None) -> Any:
+    def _launch_dragon_component(workflow_component,size_kwarg="size",rank_kwarg="rank",mpi_kwarg="init_MPI") -> Any:
         """
         Launch a single component using Dragon.
         
         Args:
             workflow_component: WorkflowComponent object to launch
-            dragon_dict: Dragon dictionary for inter-process communication
+            size_kwarg: Keyword argument for total processes (default: "size")
+            rank_kwarg: Keyword argument for process rank (default: "rank")
+            mpi_kwarg: Keyword argument for MPI initialization (default: "init_MPI")
             
         Returns:
             Launched process group
@@ -258,6 +293,12 @@ class BasicLauncher:
                     host_name=node
                 )
                 
+
+                # Prepare environment
+                env = BasicLauncher._prepare_environment(
+                    additional_env=workflow_component.env_vars
+                )
+
                 # Set CPU affinity
                 if workflow_component.cpu_affinity and local_rank < len(workflow_component.cpu_affinity):
                     placement_policy.cpu_affinity = [workflow_component.cpu_affinity[local_rank]]
@@ -265,23 +306,26 @@ class BasicLauncher:
                 # Set GPU affinity
                 if workflow_component.gpu_affinity and local_rank < len(workflow_component.gpu_affinity):
                     placement_policy.gpu_affinity = [workflow_component.gpu_affinity[local_rank]]
+                    env["ZE_AFFINITY_MASK"] = workflow_component.gpu_affinity[local_rank]
+                    env["CUDA_VISIBLE_DEVICES"] = workflow_component.gpu_affinity[local_rank]
                 
-                # Prepare environment
-                env = BasicLauncher._prepare_environment(
-                    additional_env=workflow_component.env_vars
-                )
                 
-                # Create process template
+                # Create process template with args
                 template_args = []
-                if dragon_dict is not None:
-                    template_args.append(dragon_dict)
+
+                # Add workflow component args
+                component_args = getattr(workflow_component, 'args', None)
+                if component_args:
+                    # Convert dict to tuple of values
+                    template_args.extend(component_args.values())
                 
                 pg.add_process(
                     nproc=1,
                     template=ProcessTemplate(
                         target=workflow_component.executable,
                         args=tuple(template_args),
-                        cwd=os.path.dirname(__file__),
+                        kwargs={size_kwarg: total_processes, rank_kwarg: process_count, mpi_kwarg: False},
+                        cwd=os.getcwd(),
                         policy=placement_policy,
                         stdout=Popen.DEVNULL,
                         env=env
@@ -293,28 +337,56 @@ class BasicLauncher:
             if process_count >= total_processes:
                 break
         
+        print(f"Launching Dragon process group with {process_count} processes on {len(workflow_component.nodes)} nodes")
         pg.init()
         pg.start()
         
         return pg
     
-
-    @staticmethod
-    def _wait_for_dragon_processes(process_groups: List[Any], timeout: int = 30):
+    def _launch_local_component(self, workflow_component) -> Union[subprocess.Popen, multiprocessing.Process]:
         """
-        Wait for Dragon process groups to complete.
+        Launch a single component locally.
         
         Args:
-            process_groups: List of process groups to wait for
-            timeout: Timeout for joining process groups
+            workflow_component: WorkflowComponent object to launch
+            
+        Returns:
+            subprocess.Popen for string executables or multiprocessing.Process for callables
         """
-        for pg in process_groups:
-            try:
-                pg.join(timeout)
-            except Exception as e:
-                pg.stop()
-            finally:
-                pg.close()
+        if isinstance(workflow_component.executable, str):
+            # If executable is a string, use subprocess.Popen directly
+            env = self._prepare_environment(additional_env=getattr(workflow_component, 'env_vars', {}))
+            cmd_args = shlex.split(workflow_component.executable)
+            
+            # Add args if provided - format as "key value" pairs
+            args = getattr(workflow_component, 'args', None)
+            if args:
+                # Convert dict to "key value" format
+                for key, value in args.items():
+                    cmd_args.extend([str(key), str(value)])
+            
+            process = subprocess.Popen(
+                cmd_args,
+                env=env,
+                cwd=getattr(workflow_component, 'run_dir', None),
+                stdout=None,
+                stderr=None,
+            )
+            return process
+            
+        elif callable(workflow_component.executable):
+            # If executable is a callable, run it in multiprocessing.Process
+            args = getattr(workflow_component, 'args', None)
+            
+            process = multiprocessing.Process(
+                target=workflow_component.executable,
+                args=tuple(args.values()) if args is not None else (),
+                name=getattr(workflow_component, 'name', f"local_{id(workflow_component)}")
+            )
+            process.start()
+            return process
+        else:
+            raise ValueError(f"Unsupported executable type: {type(workflow_component.executable)}. Expected str or callable.")
 
     def launch_component(self, workflow_component) -> Union[multiprocessing.Process, Any]:
         """
@@ -330,9 +402,13 @@ class BasicLauncher:
         
         if component_type == "dragon":
             return self._launch_dragon_component(workflow_component)
-        else:
+        elif component_type == "local":
+            return self._launch_local_component(workflow_component)
+        elif component_type == "remote":
             # Use ensemble launcher for all other types (local, remote, ensemble)
             return self._launch_component_with_ensemble(workflow_component)
+        else:
+            raise ValueError(f"Unknown component type: {component_type}. Expected 'local', 'remote', 'dragon', or 'ensemble'.")
     
     def wait_for_component(self, launched_process, timeout: int = None) -> Union[int, List[int]]:
         """
@@ -345,8 +421,21 @@ class BasicLauncher:
         Returns:
             Exit code or list of exit codes
         """
-        if isinstance(launched_process, multiprocessing.Process):
-            # This is a multiprocessing.Process from ensemble launcher
+        if isinstance(launched_process, subprocess.Popen):
+            # This is a subprocess.Popen from local string executable
+            try:
+                launched_process.wait(timeout=timeout)
+                return launched_process.returncode if launched_process.returncode is not None else 0
+            except subprocess.TimeoutExpired:
+                # If wait times out, terminate the process
+                launched_process.terminate()
+                try:
+                    launched_process.wait(timeout=5)  # Give 5 seconds for graceful termination
+                except subprocess.TimeoutExpired:
+                    launched_process.kill()  # Force kill if still alive
+                return launched_process.returncode if launched_process.returncode is not None else 124
+        elif isinstance(launched_process, multiprocessing.Process):
+            # This is a multiprocessing.Process from ensemble launcher or callable
             try:
                 launched_process.join(timeout=timeout)
                 return launched_process.exitcode if launched_process.exitcode is not None else 0
@@ -359,146 +448,14 @@ class BasicLauncher:
                         launched_process.kill()  # Force kill if still alive
                 return launched_process.exitcode if launched_process.exitcode is not None else 1
         elif DRAGON_AVAILABLE and ProcessGroup is not None and isinstance(launched_process, ProcessGroup):
-            self._wait_for_dragon_processes([launched_process], timeout or 30)
-            return [0]  # Dragon doesn't provide exit codes in the same way
+            try:
+                launched_process.join(timeout)
+                exit_code = 1 if any(p[1]!=0 for p in launched_process.inactive_puids) else 0
+            except Exception as e:
+                exit_code = 1
+                launched_process.stop()
+            finally:
+                launched_process.close()
+            return exit_code
         else:
-            raise ValueError(f"Unknown launched process type: {type(launched_process)}. Expected multiprocessing.Process, task_info dict, or Dragon ProcessGroup.")
-
-    def get_task_result(self, launched_process: multiprocessing.Process) -> Dict[str, Any]:
-        """
-        Get the task result from a completed ensemble launcher multiprocessing.Process.
-        
-        Args:
-            launched_process: The multiprocessing.Process object returned by launch_component
-            
-        Returns:
-            Task info dictionary with execution results
-        """
-        if not isinstance(launched_process, multiprocessing.Process):
-            raise ValueError("get_task_result only supports multiprocessing.Process objects from ensemble launcher")
-        
-        if launched_process.is_alive():
-            raise RuntimeError("Process is still running. Call wait_for_component() first.")
-        
-        # Return the task info from the worker instance
-        # Since the process has completed, we can access the final state
-        task_id = getattr(launched_process, 'task_id', None)
-        worker_instance = getattr(launched_process, 'worker_instance', None)
-        
-        if task_id and worker_instance and hasattr(worker_instance, 'my_tasks'):
-            return worker_instance.my_tasks.get(task_id, {})
-        else:
-            # Fallback - create a basic result based on exit code
-            return {
-                'status': 'finished' if launched_process.exitcode == 0 else 'failed',
-                'returncode': launched_process.exitcode,
-                'execution_time': 0.0
-            }
-
-    @classmethod
-    def create_ensemble_launcher(cls, system: str = "local", launcher_mode: str = "mpi", **kwargs):
-        """
-        Create a BasicLauncher configured to use ensemble_launcher by default.
-        
-        Args:
-            system: System name (e.g., "local", "aurora", "polaris")
-            launcher_mode: Launcher mode ("mpi" or "high throughput")
-            **kwargs: Additional launcher configuration options
-            
-        Returns:
-            BasicLauncher instance configured for ensemble launcher
-        """
-        launcher_config = {"mode": launcher_mode}
-        launcher_config.update(kwargs)
-        
-        return cls(system=system, launcher_config=launcher_config)
-    
-    def get_task_status(self, task_result: Union[Dict[str, Any], multiprocessing.Process]) -> str:
-        """
-        Get the status of a task from ensemble launcher result.
-        
-        Args:
-            task_result: Task info dictionary or multiprocessing.Process object
-            
-        Returns:
-            Task status string ("finished", "failed", "running", etc.)
-        """
-        if isinstance(task_result, multiprocessing.Process):
-            if task_result.is_alive():
-                return "running"
-            else:
-                return "finished" if task_result.exitcode == 0 else "failed"
-        elif isinstance(task_result, dict) and 'status' in task_result:
-            return task_result['status']
-        return "unknown"
-    
-    def get_task_execution_time(self, task_result: Union[Dict[str, Any], multiprocessing.Process]) -> float:
-        """
-        Get the execution time of a task from ensemble launcher result.
-        
-        Args:
-            task_result: Task info dictionary or multiprocessing.Process object
-            
-        Returns:
-            Execution time in seconds, or 0.0 if not available
-        """
-        if isinstance(task_result, multiprocessing.Process):
-            # For multiprocessing.Process, we need to get the actual task result
-            if not task_result.is_alive():  # Process has completed
-                actual_result = self.get_task_result(task_result)
-                return actual_result.get('execution_time', 0.0)
-            return 0.0  # Still running
-        elif isinstance(task_result, dict) and 'execution_time' in task_result:
-            return task_result['execution_time']
-        return 0.0
-
-
-# Example usage:
-"""
-To use the ensemble launcher integration (ensemble_launcher is required):
-
-from wfMiniAPI.launcher import BasicLauncher
-
-# Create a launcher configured for ensemble execution
-launcher = BasicLauncher.create_ensemble_launcher(system="local", launcher_mode="mpi")
-
-# Or create with specific configuration
-launcher = BasicLauncher(
-    system="aurora", 
-    launcher_config={"mode": "high throughput", "cpu_bind": True}
-)
-
-# Launch a workflow component
-# The launcher now uses ensemble_launcher for all component types (local, remote, ensemble)
-# Assuming you have a workflow_component object with the necessary attributes:
-# - executable: str or callable
-# - name: str
-# - ppn: int (processes per node)
-# - nodes: List[str] (optional)
-# - gpu_affinity: List[str] (optional)
-# - cpu_affinity: List[int] (optional)
-# - env_vars: Dict[str, str] (optional)
-# - type: str ("local", "remote", "dragon", or "ensemble") - defaults to "ensemble"
-
-# Launch returns a multiprocessing.Process object (non-blocking)
-process = launcher.launch_component(workflow_component)
-
-# Check status while running
-status = launcher.get_task_status(process)
-print(f"Task status: {status}")
-
-# Wait for completion (returns exit code)
-exit_code = launcher.wait_for_component(process)
-
-# Get detailed task results after completion
-task_result = launcher.get_task_result(process)
-exec_time = launcher.get_task_execution_time(task_result)
-
-print(f"Task completed with exit code: {exit_code}")
-print(f"Execution time: {exec_time}s")
-
-Note: This launcher requires ensemble_launcher to be installed. 
-Dragon components are still supported if dragon is available.
-All local and remote components are now executed through ensemble_launcher as 
-non-blocking multiprocessing.Process objects for better resource management and system optimization.
-"""
+            raise ValueError(f"Unknown launched process type: {type(launched_process)}. Expected subprocess.Popen, multiprocessing.Process, or Dragon ProcessGroup.")

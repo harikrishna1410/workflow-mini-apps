@@ -6,7 +6,6 @@ import argparse
 import json
 from typing import Dict, List, Optional, Union, Callable, Any
 from dataclasses import dataclass, field
-from wfMiniAPI.component import Component
 from wfMiniAPI.launcher import BasicLauncher
 
 
@@ -16,39 +15,15 @@ class WorkflowComponent:
     # Required fields (no defaults) must come first
     name: str
     executable: Union[str, Callable]
-    config: Dict[str, Any]
-    type: str = "local"  # should belong to the list ["local", "remote", "dragon"]
+    type: str  # should belong to the list ["local", "remote", "dragon"]
+    args: Dict[str, Any] = field(default_factory=dict)  # Arguments for the component
     nodes: List[str] = field(default_factory=list)
     ppn: int = 1
-    cpu_affinity: List[int] = field(default_factory=list)
-    gpu_affinity: List[str] = field(default_factory=list)
+    num_gpus_per_process: int = 0
+    cpu_affinity: List[int] = None
+    gpu_affinity: List[str] = None
     env_vars: Dict[str, str] = field(default_factory=dict)
     dependencies: List[str] = field(default_factory=list)  # Other component names this depends on
-
-
-@dataclass
-class ServerComponent:
-    """Represents a server component in the workflow (e.g., database, web server)."""
-    name: str
-    server_type: str  # e.g., 'redis', 'dragon', 'http', 'tcp'
-    host: str = "localhost"
-    port: int = 8080
-    config: Dict[str, Any] = field(default_factory=dict)
-    nodes: List[str] = field(default_factory=list)
-    startup_command: Optional[str] = None  # Command to start the server
-    health_check_url: Optional[str] = None  # URL to check if server is healthy
-    startup_timeout: int = 30  # Seconds to wait for server startup
-    dependencies: List[str] = field(default_factory=list)  # Other components this depends on
-    env_vars: Dict[str, str] = field(default_factory=dict)
-    
-    @property
-    def address(self) -> str:
-        """Get the server address as host:port."""
-        return f"{self.host}:{self.port}"
-    
-    def is_local(self) -> bool:
-        """Check if this is a local server."""
-        return self.host in ["localhost", "127.0.0.1", "0.0.0.0"]
 
 
 class Workflow:
@@ -77,17 +52,16 @@ class Workflow:
         # Registered workflow components
         self.components: Dict[str, WorkflowComponent] = {}
         
-        # Registered server components
-        self.servers: Dict[str, ServerComponent] = {}
-        
         # Launcher instance
-        self.launcher = BasicLauncher(launcher_config=self.configs.get('launcher', {"mode": "mpi"}))
-    
+        self.launcher = BasicLauncher(sys_info=self.configs.get('sys_info', {"name": "local"}), launcher_config=self.configs.get('launcher', {"mode": "mpi"}))
+
     def register_component(self, name: str, 
                           executable: Union[str, Callable], 
-                          config: Dict[str, Any] = None, 
+                          type: str,
+                          args: Dict[str, Any] = None,
                           nodes: List[str] = None,
-                          ppn: int = 1, 
+                          ppn: int = 1,
+                          num_gpus_per_process: int = 0,
                           cpu_affinity: List[int] = None,
                           gpu_affinity: List[str] = None, 
                           env_vars: Dict[str, str] = None,
@@ -98,9 +72,11 @@ class Workflow:
         Args:
             name: Unique name for this component
             executable: Command string or Python function to execute
-            config: Configuration dictionary for the component
+            type: Component type ("local", "remote", "dragon")
+            args: Arguments dictionary for the component
             nodes: List of nodes to run on (optional)
             ppn: Processes per node (optional)
+            num_gpus_per_process: Number of GPUs per process (optional)
             cpu_affinity: CPU cores to bind to (optional)
             gpu_affinity: GPU devices to bind to (optional)
             env_vars: Environment variables (optional)
@@ -111,81 +87,28 @@ class Workflow:
         """
         component = WorkflowComponent(
             name=name,
+            type=type,
             executable=executable,
-            config=config or {},
+            args=args or {},
             nodes=nodes or [],
             ppn=ppn,
-            cpu_affinity=cpu_affinity or [],
-            gpu_affinity=gpu_affinity or [],
+            num_gpus_per_process=num_gpus_per_process,
+            cpu_affinity=cpu_affinity,
+            gpu_affinity=gpu_affinity,
             env_vars=env_vars or {},
             dependencies=dependencies or []
         )
         
         self.components[name] = component
         return self
-    
-    def register_server(self, name: str,
-                       server_type: str,
-                       host: str = "localhost",
-                       port: int = 8080,
-                       config: Dict[str, Any] = None,
-                       nodes: List[str] = None,
-                       startup_command: str = None,
-                       health_check_url: str = None,
-                       startup_timeout: int = 30,
-                       dependencies: List[str] = None,
-                       env_vars: Dict[str, str] = None) -> 'Workflow':
-        """
-        Register a server component in the workflow.
-        
-        Args:
-            name: Unique name for this server
-            server_type: Type of server ('redis', 'dragon', 'http', 'tcp', etc.)
-            host: Host address (default: localhost)
-            port: Port number (default: 8080)
-            config: Configuration dictionary for the server
-            nodes: List of nodes to run on (optional)
-            startup_command: Command to start the server (optional)
-            health_check_url: URL to check server health (optional)
-            startup_timeout: Seconds to wait for startup (default: 30)
-            dependencies: List of component names this depends on (optional)
-            env_vars: Environment variables (optional)
-            
-        Returns:
-            Self for method chaining
-        """
-        server = ServerComponent(
-            name=name,
-            server_type=server_type,
-            host=host,
-            port=port,
-            config=config or {},
-            nodes=nodes or [],
-            startup_command=startup_command,
-            health_check_url=health_check_url,
-            startup_timeout=startup_timeout,
-            dependencies=dependencies or [],
-            env_vars=env_vars or {}
-        )
-        
-        self.servers[name] = server
-        return self
 
     def get_component(self, name: str) -> Optional[WorkflowComponent]:
         """Get a registered component by name."""
         return self.components.get(name)
     
-    def get_server(self, name: str) -> Optional[ServerComponent]:
-        """Get a registered server by name."""
-        return self.servers.get(name)
-    
     def list_components(self) -> List[str]:
         """List all registered component names."""
         return list(self.components.keys())
-    
-    def list_servers(self) -> List[str]:
-        """List all registered server names."""
-        return list(self.servers.keys())
 
     def _resolve_execution_order(self) -> List[List[str]]:
         """
@@ -278,9 +201,11 @@ class Workflow:
 
     def component(self, func: Callable = None, *, 
                  name: str = None,
-                 config: Dict[str, Any] = None, 
+                 type: str = "local",
+                 args: Dict[str, Any] = None,
                  nodes: List[str] = None,
-                 ppn: int = 1, 
+                 ppn: int = 1,
+                 num_gpus_per_process: int = 0,
                  cpu_affinity: List[int] = None,
                  gpu_affinity: List[str] = None, 
                  env_vars: Dict[str, str] = None,
@@ -296,9 +221,11 @@ class Workflow:
         Args:
             func: Function to register (when used without parentheses)
             name: Unique name for this component (defaults to function name)
-            config: Configuration dictionary for the component
+            type: Component type ("local", "remote", "dragon")
+            args: Arguments dictionary for the component
             nodes: List of nodes to run on (optional)
             ppn: Processes per node (optional)
+            num_gpus_per_process: Number of GPUs per process (optional)
             cpu_affinity: CPU cores to bind to (optional)
             gpu_affinity: GPU devices to bind to (optional)
             env_vars: Environment variables (optional)
@@ -316,7 +243,7 @@ class Workflow:
             def another_function():
                 return 0
                 
-            @workflow.component(name="my_task", dependencies=["setup"])
+            @workflow.component(name="my_task", args={"--input": "file.txt"}, dependencies=["setup"])
             def third_function():
                 return 0
         """
@@ -324,10 +251,12 @@ class Workflow:
             component_name = name if name is not None else f.__name__
             self.register_component(
                 name=component_name,
+                type=type,
                 executable=f,
-                config=config,
+                args=args,
                 nodes=nodes,
                 ppn=ppn,
+                num_gpus_per_process=num_gpus_per_process,
                 cpu_affinity=cpu_affinity,
                 gpu_affinity=gpu_affinity,
                 env_vars=env_vars,
@@ -341,17 +270,3 @@ class Workflow:
         
         # Otherwise, this was called with parentheses: @workflow.component() or @workflow.component(args)
         return decorator
-
-def main(config_files: Dict[str, str], **kwargs):
-    """
-    Main function to execute a generic workflow.
-    
-    Args:
-        config_files: Dictionary of configuration files by name
-        **kwargs: Additional arguments for workflow execution
-    
-    Returns:
-        0 for success, 1 for failure
-    """
-    workflow = Workflow(**config_files)
-    return workflow.launch(**kwargs)

@@ -10,7 +10,7 @@ try:
     import oneccl_bindings_for_pytorch
 except ModuleNotFoundError as e:
     pass
-from .component import Component
+from .component import DataStore
 import time
 import socket
 import sys
@@ -101,10 +101,10 @@ def train(model, dataloader, criterion, optimizer, device, num_epochs=10,ddp=Fal
             epoch_loss = running_loss / len(dataloader.dataset)
 
 
-class AI(Component):
+class AI(DataStore):
     def __init__(self,
                  name = "AI", 
-                 config:dict = {"type":"filesystem"},
+                 server_info:dict = {"type":"filesystem"},
                 model_type="feedforward", 
                 dropout=0.1, 
                 use_batchnorm=True, 
@@ -123,7 +123,7 @@ class AI(Component):
                 comm=None,
                 logging=False,
                 log_level=logging_.INFO):
-        super().__init__(name,config=config,logging=logging,log_level=log_level)
+        super().__init__(name,server_info=server_info,logging=logging,log_level=log_level)
         self.name = name
         self.model_type = model_type
         self.loss_type = loss_type

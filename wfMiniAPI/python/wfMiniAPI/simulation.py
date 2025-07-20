@@ -1,5 +1,5 @@
 import json
-from wfMiniAPI.component import Component
+from wfMiniAPI.component import DataStore
 import time
 from wfMiniAPI.kernel import *
 import os
@@ -7,9 +7,16 @@ import sys
 import logging as _logging
 import socket
 
-class Simulation(Component):
-    def __init__(self,name="SIM",comm=None,config:dict={"type":"filesystem"},logging=False,log_level=_logging.INFO,**kwargs):
-        super().__init__(name,config=config,logging=logging,log_level=log_level)
+class Simulation(DataStore):
+    def __init__(self,name="SIM",comm=None,server_info=None,logging=False,log_level=_logging.INFO,**kwargs):
+        # Create default server_info if not provided
+        if server_info is None:
+            server_info = {
+                "type": "filesystem",
+                "config": {"type": "filesystem", "server-address": os.path.join(os.getcwd(), ".tmp"), "nshards": 64}
+            }
+        
+        super().__init__(name, server_info, logging=logging, log_level=log_level)
         self.name = name
         self.comm = comm
         self.kernels = []

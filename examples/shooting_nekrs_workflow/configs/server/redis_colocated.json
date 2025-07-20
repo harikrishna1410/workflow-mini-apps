@@ -1,0 +1,6 @@
+{
+    "type": "redis",
+    "role": "server",
+    "db-type": "colocated",
+    "redis-server-exe": "/home/ht1410/redis/src/redis-server"
+}
